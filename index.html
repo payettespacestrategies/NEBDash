@@ -77,7 +77,7 @@ table.comp tr:hover{background:#f8f8f5}
 .derived{background:var(--lTeal);border:2px solid var(--teal);border-radius:var(--r);padding:14px;margin-bottom:12px}
 .derived-label{font-size:.82rem;color:var(--mut);font-weight:500}
 .derived-val{font-family:'IBM Plex Mono',monospace;font-size:2rem;font-weight:700;color:var(--navy)}
-@media print{body{padding:0;background:#fff}.hd,.tabs,.btn{display:none!important}}
+@media print{body{padding:0;background:#fff}.hd,.tabs,.btn,footer{display:none!important}.w{max-width:none;padding:0}.card{break-inside:avoid;page-break-inside:avoid}.ms{break-inside:avoid}}
 footer{margin-top:1.5rem;font-size:.7rem;color:var(--mut);font-family:'IBM Plex Mono',monospace;display:flex;align-items:center;justify-content:space-between;padding-top:12px;border-top:1px solid var(--bdr)}
 footer .ft-left{display:flex;align-items:center;gap:6px}
 footer .ft-left .btn{font-size:.6rem;padding:3px 8px;min-width:0}
@@ -127,7 +127,7 @@ footer .ft-right{display:flex;align-items:center;gap:12px}
 <div class="tabs" id="tabBar"></div>
 <div class="ms" id="metrics"></div>
 <div id="content"></div>
-<footer><div class="ft-left"><button class="btn btn-navy" onclick="exportJSON()">Export JSON</button><button class="btn btn-out" onclick="document.getElementById('importJsonInput').click()">Import JSON</button><input type="file" id="importJsonInput" accept=".json,application/json" style="display:none" onchange="importJSON(event)"><button class="btn btn-navy" onclick="exportXLSX()">Export Excel</button><button class="btn btn-out" onclick="window.print()">Print</button></div><div class="ft-right"><span id="ts"></span></div></footer>
+<footer><div class="ft-left"><button class="btn btn-navy" onclick="exportJSON()">Export JSON</button><button class="btn btn-out" onclick="document.getElementById('importJsonInput').click()">Import JSON</button><input type="file" id="importJsonInput" accept=".json,application/json" style="display:none" onchange="importJSON(event)"><button class="btn btn-navy" onclick="exportXLSX()">Export Excel</button><button class="btn btn-out" onclick="printDashboard()">Print</button></div><div class="ft-right"><span id="ts"></span></div></footer>
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/xlsx-js-style@1.2.0/dist/xlsx.bundle.js"></script>
@@ -225,11 +225,14 @@ var S = {
     { name:'Loading',                     nasf:2000, on:true, cat:'support' },
     { name:'Bldg Support (Storage, IT, Ops)', nasf:2000, on:true, cat:'support' },
   ],
+  // Each item has a `floor` assignment:
+  //   'all' = item repeats on every research floor (legacy behavior)
+  //   '<n>' (string number, e.g. '2','3','4') = item lives only on that floor
   upperCommunity: [
-    { name:'Living Room / Lounge', nasf:600, on:true },
-    { name:'Meeting Rooms (2\u20133)', nasf:2000, on:true },
-    { name:'Tea Station / Kitchenette + Seating', nasf:500, on:true },
-    { name:'Whiteboard Nooks / Phone Rooms', nasf:500, on:true },
+    { name:'Living Room / Lounge', nasf:600, on:true, floor:'all' },
+    { name:'Meeting Rooms (2\u20133)', nasf:2000, on:true, floor:'all' },
+    { name:'Tea Station / Kitchenette + Seating', nasf:500, on:true, floor:'all' },
+    { name:'Whiteboard Nooks / Phone Rooms', nasf:500, on:true, floor:'all' },
   ],
 
   // Tab 7 - Scenarios
@@ -259,6 +262,14 @@ var S = {
     wetbio: 3, wetchem: 3, dryelec: 0, comp: 0,
     optics: 2, optnano: 2, custom_1775851246404: 0
   },
+
+  // Per-floor PI assignment for upper research floors.
+  // Shape: { '<floorNum>': { '<typeId>': <piCount>, ... }, ... }
+  // Floors are numbered starting at 2 (ground = 1, basement is separate).
+  // If empty / partial, getPIFloorAllocation() distributes the remaining
+  // upper-floor PIs (= types[i].pis − basementAllocation[i]) evenly across
+  // available research floors. Set explicitly to weight a floor up or down.
+  piFloorAllocation: {},
 
   // Tab 9 - Cost (Vermeulens Q4 2025 base rates, Evanston IL, CMAR)
   deptGrossPct: 0.85, // Departmental Gross as % of GSF (remainder is MEP/infrastructure)
@@ -336,6 +347,128 @@ function calcGroupOpenLab(t)    { return t.fteCount * t.openLabPerFTE; }
 function calcGroupLabSupport(t) { return t.fteCount * t.labSupportPerFTE; }
 function calcGroupDesk(t)       { return t.fteCount * t.deskPerFTE; }
 
+// Per-floor PI allocation resolver.
+// Returns a fully-populated map { floorNum:{typeId:piCount,...}, ... } that
+// covers every research floor (2..aboveGradeFloors) and every typology.
+//   • Honors any explicit assignment in S.piFloorAllocation.
+//   • Pool per typology = types[i].pis − basementAllocation[id].
+//   • Unallocated remainder is distributed evenly across all research floors,
+//     with rounding remainders dropped on the lowest research floor (Floor 2).
+//   • If the user over-assigns a typology, their values are kept verbatim and
+//     surfaced as a warning by the caller (sum > pool).
+// Mutating this object does not affect S — caller should use setPIFloor().
+function getPIFloorAllocation() {
+  var researchFloors = Math.max(0, S.aboveGradeFloors - 1);
+  var alloc = {};
+  for (var f = 2; f <= S.aboveGradeFloors; f++) alloc[String(f)] = {};
+  if (researchFloors === 0) return alloc;
+
+  S.types.forEach(function(t) {
+    var basementPIs = (S.basementAllocation && S.basementAllocation[t.id]) || 0;
+    var upperPIs = Math.max(0, (t.pis || 0) - basementPIs);
+    // Sum any explicit assignment for this typology
+    var explicitTotal = 0, explicitFloors = {};
+    for (var f = 2; f <= S.aboveGradeFloors; f++) {
+      var k = String(f);
+      var v = (S.piFloorAllocation && S.piFloorAllocation[k] && S.piFloorAllocation[k][t.id]);
+      if (typeof v === 'number' && !isNaN(v) && v >= 0) {
+        explicitFloors[k] = v;
+        explicitTotal += v;
+      }
+    }
+    // Start from explicit values
+    for (var f = 2; f <= S.aboveGradeFloors; f++) {
+      var k = String(f);
+      alloc[k][t.id] = explicitFloors[k] || 0;
+    }
+    // Distribute the remainder evenly across floors that were NOT explicitly set
+    var remaining = upperPIs - explicitTotal;
+    if (remaining > 0) {
+      var unsetFloors = [];
+      for (var f = 2; f <= S.aboveGradeFloors; f++) {
+        var k = String(f);
+        if (typeof explicitFloors[k] === 'undefined') unsetFloors.push(k);
+      }
+      if (unsetFloors.length === 0) {
+        // Everything was explicit — pile the remainder onto Floor 2 to keep totals honest
+        unsetFloors = ['2'];
+      }
+      var per = Math.floor(remaining / unsetFloors.length);
+      var leftover = remaining - per * unsetFloors.length;
+      unsetFloors.forEach(function(k, idx) {
+        alloc[k][t.id] = (alloc[k][t.id] || 0) + per + (idx === 0 ? leftover : 0);
+      });
+    }
+  });
+  return alloc;
+}
+
+// Compute per-floor lab + desk + office NASF given an allocation map.
+// Returns { '<floor>': { lab:N, office:N, pis:N, byType:{id:pis} }, ... }
+function computeFloorBreakdown(alloc) {
+  var out = {};
+  for (var f = 2; f <= S.aboveGradeFloors; f++) {
+    var k = String(f);
+    var floorPIs = alloc[k] || {};
+    var lab = 0, office = 0, totalPIs = 0;
+    var byType = {};
+    S.types.forEach(function(t) {
+      var n = floorPIs[t.id] || 0;
+      if (n <= 0) { byType[t.id] = 0; return; }
+      // Their LAB lives wherever they're assigned (basement OR this floor).
+      // For the upper-floor allocation, all of their lab+desk count here.
+      var groupOpenLab = calcGroupOpenLab(t);
+      var groupLabSupport = calcGroupLabSupport(t);
+      var groupDesk = calcGroupDesk(t);
+      lab += (groupOpenLab + groupLabSupport + groupDesk) * n;
+      // Faculty + flex office always live with the PI on the upper floor
+      office += (t.facultyOffice + t.flexOffice) * n;
+      totalPIs += n;
+      byType[t.id] = n;
+    });
+    // Add the desk/office contribution for any PIs whose LAB is in the basement
+    // but who still occupy desk + office on this floor. We don't know which
+    // upper floor those PIs sit on — by convention, distribute evenly across
+    // research floors. (basementAllocation × deskPerFTE × fteCount + offices)
+    out[k] = {
+      lab: Math.round(lab),
+      office: Math.round(office),
+      pis: totalPIs,
+      byType: byType
+    };
+  }
+  // Now layer in desk + office for basement-lab PIs (their offices remain upstairs)
+  var researchFloors = Math.max(1, S.aboveGradeFloors - 1);
+  S.types.forEach(function(t) {
+    var basementPIs = (S.basementAllocation && S.basementAllocation[t.id]) || 0;
+    if (basementPIs <= 0) return;
+    var groupDesk = calcGroupDesk(t);
+    var groupOffice = t.facultyOffice + t.flexOffice;
+    var deskNASF = groupDesk * basementPIs;
+    var officeNASF = groupOffice * basementPIs;
+    var per = 1 / researchFloors;
+    for (var f = 2; f <= S.aboveGradeFloors; f++) {
+      var k = String(f);
+      out[k].lab = Math.round(out[k].lab + deskNASF * per);
+      out[k].office = Math.round(out[k].office + officeNASF * per);
+    }
+  });
+  return out;
+}
+
+function setPIFloor(floor, typeId, val) {
+  var n = parseInt(val, 10);
+  if (isNaN(n) || n < 0) n = 0;
+  if (!S.piFloorAllocation) S.piFloorAllocation = {};
+  if (!S.piFloorAllocation[String(floor)]) S.piFloorAllocation[String(floor)] = {};
+  S.piFloorAllocation[String(floor)][typeId] = n;
+  render();
+}
+function resetPIFloorAllocation() {
+  S.piFloorAllocation = {};
+  render();
+}
+
 // Merge large lab NASF into constituent typologies for display
 function mergeLargeLabBreakdown(typeBreakdown) {
   var largeLab = null;
@@ -408,10 +541,33 @@ function C() {
   var gfCommunity = S.gfProgram.filter(function(g){return g.on && g.cat==='community'}).reduce(function(s,g){return s+g.nasf},0);
   var gfSupport = S.gfProgram.filter(function(g){return g.on && g.cat==='support'}).reduce(function(s,g){return s+g.nasf},0);
 
-  // Upper floor community: itemized per-floor, then multiplied by research floors
+  // Upper floor community
+  //   'all'-floor items repeat on each research floor → multiplied below.
+  //   Floor-specific items (floor:'2','3',…) count once on that floor only.
+  // upperCommunityPerFloor is the per-floor "all" total (used for legacy display).
+  // upperCommunityByFloor is keyed by floor number string and contains the
+  // ALL-floor total + that floor's specific items, so renderStacking can ask
+  // "how much community sits on floor N?" directly.
   var upperCommunityPerFloor = 0;
-  S.upperCommunity.forEach(function(u) { if (u.on) upperCommunityPerFloor += u.nasf; });
-  var upperCommunityTotal = upperCommunityPerFloor * researchFloors;
+  var upperCommunitySpecificTotal = 0;
+  var upperCommunityByFloor = {}; // { '2': nasf, '3': nasf, ... }
+  S.upperCommunity.forEach(function(u) {
+    if (!u.on) return;
+    var fl = u.floor || 'all';
+    if (fl === 'all') {
+      upperCommunityPerFloor += u.nasf;
+    } else {
+      upperCommunitySpecificTotal += u.nasf;
+      upperCommunityByFloor[fl] = (upperCommunityByFloor[fl] || 0) + u.nasf;
+    }
+  });
+  // Add the all-floor total to every research floor's bucket so callers can
+  // index by floor and get the complete per-floor community NASF.
+  for (var rf = 2; rf <= S.aboveGradeFloors; rf++) {
+    var key = String(rf);
+    upperCommunityByFloor[key] = (upperCommunityByFloor[key] || 0) + upperCommunityPerFloor;
+  }
+  var upperCommunityTotal = upperCommunityPerFloor * researchFloors + upperCommunitySpecificTotal;
   var communityNASFActual = gfCommunity + upperCommunityTotal;
   var totalDemand = researchNASF + communityNASFActual + eventNASF + gfSupport;
   var surplus = totalNASF - totalDemand;
@@ -534,7 +690,10 @@ function C() {
     typeBreakdown:typeBreakdown, coreNASF:coreNASF, coreTarget:coreTarget,
     researchNASF:researchNASF, gfUsed:gfUsed, gfCommunity:gfCommunity,
     gfSupport:gfSupport, upperCommunityTotal:upperCommunityTotal,
-    upperCommunityPerFloor:upperCommunityPerFloor, totalDemand:totalDemand, surplus:surplus,
+    upperCommunityPerFloor:upperCommunityPerFloor,
+    upperCommunityByFloor:upperCommunityByFloor,
+    upperCommunitySpecificTotal:upperCommunitySpecificTotal,
+    totalDemand:totalDemand, surplus:surplus,
     bldgOpenLab:bldgOpenLab, bldgLabSupport:bldgLabSupport, bldgDesk:bldgDesk, bldgOffice:bldgOffice,
     energyBreakdown:energyBreakdown, totalKBTU:totalKBTU, buildingEUI:buildingEUI,
     cost: calcCost(totalGSF, totalNASF, piNASF, coreNASF, communityNASFActual, eventNASF, gfSupport, typeBreakdown, bldgOpenLab, bldgLabSupport, bldgDesk),
@@ -1185,23 +1344,56 @@ function renderCommunity(d) {
   h += '<div style="margin-top:8px"><button class="btn btn-navy btn-sm" onclick="addGF()">+ Add GF Item</button></div>';
   h += '</div>';
 
-  // RIGHT: Upper Floor Community (per floor)
-  h += '<div class="card"><div class="card-title" style="color:var(--clrCommunity)">Upper Floor Community <span style="font-size:.85rem;font-weight:400;color:var(--mut)">(per research floor)</span></div>';
-  h += '<div class="card-sub">These items repeat on each of the '+d.researchFloors+' research floors.</div>';
+  // RIGHT: Upper Floor Community (with optional per-floor assignment)
+  h += '<div class="card"><div class="card-title" style="color:var(--clrCommunity)">Upper Floor Community</div>';
+  h += '<div class="card-sub">Assign each item to a specific research floor, or leave on <em>All floors</em> to repeat on every floor.</div>';
+  // Build floor options once: 'all' + Floor 2..N
+  var floorOpts = '<option value="all">All floors</option>';
+  for (var fNum = 2; fNum <= S.aboveGradeFloors; fNum++) {
+    floorOpts += '<option value="'+fNum+'">Floor '+fNum+'</option>';
+  }
   S.upperCommunity.forEach(function(u, i) {
     var bg = u.on ? 'var(--clrCommunity)' : '#ddd';
+    var fl = u.floor || 'all';
+    // Build floor select with this item's value selected
+    var sel = '<select onchange="setUCFloor('+i+',this.value)" style="font-size:.72rem;width:96px" title="Assign to a specific upper floor or leave on All floors">';
+    sel += '<option value="all"'+(fl==='all'?' selected':'')+'>All floors</option>';
+    for (var fNum = 2; fNum <= S.aboveGradeFloors; fNum++) {
+      sel += '<option value="'+fNum+'"'+(String(fl)===String(fNum)?' selected':'')+'>Floor '+fNum+'</option>';
+    }
+    sel += '</select>';
     h += '<div style="display:flex;align-items:center;gap:6px;padding:6px 0;border-bottom:1px solid var(--bdr)">';
     h += '<div style="width:16px;height:16px;border-radius:3px;background:'+bg+';cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0" onclick="toggleUC('+i+')">';
     if (u.on) h += '<span style="color:#fff;font-size:.6rem;font-weight:900">\u2713</span>';
     h += '</div>';
     h += '<input type="text" value="'+u.name.replace(/"/g,'&quot;')+'" style="flex:1;border:1px solid transparent;border-radius:4px;padding:3px 5px;font-size:.88rem;font-weight:'+(u.on?'600':'400')+';color:'+(u.on?'var(--navy)':'var(--mut)')+';font-family:inherit;background:transparent" onfocus="this.style.borderColor=\'var(--blue)\'" onblur="this.style.borderColor=\'transparent\'" onchange="renameUC('+i+',this.value)">';
+    h += sel;
     h += '<input type="number" value="'+u.nasf+'" min="0" max="5000" step="50" style="width:70px;font-size:.85rem" onchange="setUCNASF('+i+',this.value)">';
     h += '<span style="font-size:.68rem;color:var(--mut)">NASF</span>';
     h += '<button class="btn btn-out btn-sm" style="color:var(--coral);border-color:var(--coral);flex-shrink:0" onclick="deleteUC('+i+')">\u2715</button>';
     h += '</div>';
   });
-  h += '<div style="display:flex;justify-content:space-between;padding:10px 0;border-top:3px solid var(--clrCommunity);margin-top:6px"><span style="font-size:1rem;font-weight:900;color:var(--navy)">Per Floor Total</span><span style="font-family:\'IBM Plex Mono\',monospace;font-size:1.3rem;font-weight:700;color:var(--navy)">'+F(d.upperCommunityPerFloor)+' NASF</span></div>';
-  h += '<div style="font-size:.82rem;color:var(--mut);margin-top:4px">\u00d7 '+d.researchFloors+' research floors = '+F(d.upperCommunityTotal)+' total upper community NASF</div>';
+  // Summary: separate the all-floor and per-floor totals
+  h += '<div style="display:flex;justify-content:space-between;padding:8px 0;border-top:2px solid var(--bdr);margin-top:6px"><span style="font-size:.92rem;font-weight:600;color:var(--navy)">All-Floor Items (per floor)</span><span style="font-family:\'IBM Plex Mono\',monospace;font-size:1rem;font-weight:700;color:var(--navy)">'+F(d.upperCommunityPerFloor)+' NASF</span></div>';
+  h += '<div style="font-size:.78rem;color:var(--mut);margin-top:0">\u00d7 '+d.researchFloors+' research floors = '+F(d.upperCommunityPerFloor * d.researchFloors)+' NASF</div>';
+  // Per-floor specific items
+  if (d.upperCommunitySpecificTotal > 0) {
+    h += '<div style="margin-top:6px;padding-top:6px;border-top:1px dashed var(--bdr);font-size:.85rem;color:var(--navy);font-weight:600">Floor-Specific Items</div>';
+    var anyFloor = false;
+    for (var fNum = 2; fNum <= S.aboveGradeFloors; fNum++) {
+      var key = String(fNum);
+      // Count only the floor-specific contribution (subtract the all-floor pour-in)
+      var specificOnFloor = (d.upperCommunityByFloor[key]||0) - d.upperCommunityPerFloor;
+      if (specificOnFloor > 0) {
+        anyFloor = true;
+        h += '<div style="display:flex;justify-content:space-between;font-size:.85rem;padding:3px 0"><span style="color:var(--mut)">Floor '+fNum+'</span><span style="font-family:\'IBM Plex Mono\',monospace;font-weight:700;color:var(--navy)">+'+F(specificOnFloor)+' NASF</span></div>';
+      }
+    }
+    if (!anyFloor) {
+      h += '<div style="font-size:.78rem;color:var(--mut)">(none)</div>';
+    }
+  }
+  h += '<div style="display:flex;justify-content:space-between;padding:10px 0;border-top:3px solid var(--clrCommunity);margin-top:6px"><span style="font-size:1rem;font-weight:900;color:var(--navy)">Total Upper Community</span><span style="font-family:\'IBM Plex Mono\',monospace;font-size:1.3rem;font-weight:700;color:var(--navy)">'+F(d.upperCommunityTotal)+' NASF</span></div>';
   h += '<div style="margin-top:8px"><button class="btn btn-navy btn-sm" onclick="addUC()">+ Add Upper Floor Item</button></div>';
   h += '</div>';
 
@@ -1233,7 +1425,8 @@ function deleteGF(i) { S.gfProgram.splice(i, 1); render(); }
 function toggleUC(i) { S.upperCommunity[i].on = !S.upperCommunity[i].on; render(); }
 function setUCNASF(i, v) { S.upperCommunity[i].nasf = parseInt(v) || 0; render(); }
 function renameUC(i, v) { S.upperCommunity[i].name = v.trim() || S.upperCommunity[i].name; }
-function addUC() { S.upperCommunity.push({ name:'New Upper Floor Item', nasf:200, on:true }); render(); }
+function setUCFloor(i, v) { S.upperCommunity[i].floor = (v === 'all' ? 'all' : String(v)); render(); }
+function addUC() { S.upperCommunity.push({ name:'New Upper Floor Item', nasf:200, on:true, floor:'all' }); render(); }
 function deleteUC(i) { S.upperCommunity.splice(i, 1); render(); }
 
 // ============================================================
@@ -1282,17 +1475,22 @@ function renderStacking(d) {
   var resCoreNASF = d.coreNASF - bsmtCoreNASF - gfCoreNASF;
   var corePerFloor = d.researchFloors > 0 ? Math.round(resCoreNASF / d.researchFloors) : 0;
 
-  var commPerFloor = d.upperCommunityPerFloor;
-  var labPerFloor = d.researchFloors > 0 ? Math.round((d.bldgOpenLab + d.bldgLabSupport + d.bldgDesk) / d.researchFloors) : 0;
-  var officePerFloor = d.researchFloors > 0 ? Math.round(d.bldgOffice / d.researchFloors) : 0;
+  // Per-floor PI assignment + per-floor lab/office NASF
+  var piAlloc = getPIFloorAllocation();
+  var floorBreak = computeFloorBreakdown(piAlloc);
 
-  // Floor capacity checks
+  // Floor capacity checks (per floor \u2014 each upper floor evaluated individually)
   var gfAssigned = d.gfUsed + gfCoreNASF;
   var gfDeficit = Math.max(0, gfAssigned - d.gfNASF);
   var bsmtAssigned = bsmtCoreNASF + d.basementResearchNASF;
   var bsmtDeficit = Math.max(0, bsmtAssigned - d.basementNASF);
-  var upperAssigned = labPerFloor + officePerFloor + corePerFloor + commPerFloor;
-  var upperDeficit = Math.max(0, upperAssigned - d.researchFloorNASF);
+  var upperDeficit = 0;
+  for (var fc = 2; fc <= S.aboveGradeFloors; fc++) {
+    var kc = String(fc);
+    var commOnF = d.upperCommunityByFloor[kc] || 0;
+    var asgn = (floorBreak[kc].lab) + (floorBreak[kc].office) + corePerFloor + commOnF;
+    upperDeficit = Math.max(upperDeficit, asgn - d.researchFloorNASF);
+  }
 
   // Validation warning when any floor is over-programmed
   if (gfDeficit > 0 || bsmtDeficit > 0 || upperDeficit > 0) {
@@ -1300,13 +1498,13 @@ function renderStacking(d) {
     h += '<strong>\u26a0 Floor(s) Over-Programmed</strong><br>';
     if (gfDeficit > 0) h += 'Ground floor assigned <strong>'+F(gfAssigned)+' NASF</strong> exceeds capacity of <strong>'+F(d.gfNASF)+'</strong> by <strong>'+F(gfDeficit)+'</strong>. ';
     if (bsmtDeficit > 0) h += 'Basement assigned <strong>'+F(bsmtAssigned)+' NASF</strong> exceeds capacity of <strong>'+F(d.basementNASF)+'</strong> by <strong>'+F(bsmtDeficit)+'</strong>. ';
-    if (upperDeficit > 0) h += 'Upper floors assigned <strong>'+F(upperAssigned)+' NASF</strong> per floor exceeds capacity of <strong>'+F(d.researchFloorNASF)+'</strong> by <strong>'+F(upperDeficit)+'</strong>. ';
-    h += '<br><span style="color:#5D4037;font-size:.82rem">Adjust the building envelope (Tab 1), reduce program, or change the core floor split (Tab 4) so every floor fits its assigned program.</span>';
+    if (upperDeficit > 0) h += 'At least one upper floor exceeds capacity of <strong>'+F(d.researchFloorNASF)+'</strong> by up to <strong>'+F(upperDeficit)+'</strong>. ';
+    h += '<br><span style="color:#5D4037;font-size:.82rem">Adjust the building envelope (Tab 1), reduce program, or change the per-floor PI assignment below so every floor fits its assigned program.</span>';
     h += '</div>';
   }
 
   h += '<div class="card"><div class="card-title">Building Section \u2014 Program Distribution</div>';
-  h += '<div class="card-sub">Bar widths are proportional to floor plate GFA. Colored segments show assigned NASF. Labels at right show NASF, Departmental Gross (DGSF = GFA \u00d7 '+(S.deptGrossPct*100).toFixed(0)+'%), and Gross Floor Area (GFA). Core split controlled on Tab 4.</div>';
+  h += '<div class="card-sub">Bar widths are proportional to floor plate GFA. Colored segments show assigned NASF. Labels at right show NASF, Departmental Gross (DGSF = GFA \u00d7 '+(S.deptGrossPct*100).toFixed(0)+'%), and Gross Floor Area (GFA). Core split controlled on Tab 4. Per-floor PI assignment controlled below.</div>';
   h += '<div style="max-width:900px;margin:0 auto">';
 
   // Determine max GSF for proportional widths
@@ -1315,19 +1513,25 @@ function renderStacking(d) {
   h += floorVis('Penthouse', [{label:'Building Support', nasf:S.penthouseGSF, color:'var(--clrSupport)'}], S.penthouseGSF, true, S.penthouseGSF, maxFloorGSF);
 
   var topFloor = S.aboveGradeFloors;
-  var pisPerFloor = d.researchFloors > 0 ? d.totalPIs / d.researchFloors : 0;
-  var pisPerFloorLabel = pisPerFloor % 1 === 0 ? pisPerFloor.toFixed(0) : pisPerFloor.toFixed(1);
   for (var f = topFloor; f >= 2; f--) {
-    var unassigned = Math.max(0, d.researchFloorNASF - upperAssigned);
+    var fk = String(f);
+    var fLab = floorBreak[fk].lab;
+    var fOff = floorBreak[fk].office;
+    var fPIs = floorBreak[fk].pis; // upper PIs assigned to this floor
+    var fComm = d.upperCommunityByFloor[fk] || 0;
+    var fAssigned = fLab + fOff + corePerFloor + fComm;
+    var fDeficit = Math.max(0, fAssigned - d.researchFloorNASF);
+    var unassigned = Math.max(0, d.researchFloorNASF - fAssigned);
     var segments = [
-      { label:'Research Labs', nasf:labPerFloor, color:'var(--clrResearch)' },
-      { label:'Faculty Office', nasf:officePerFloor, color:FICM.office },
+      { label:'Research Labs', nasf:fLab, color:'var(--clrResearch)' },
+      { label:'Faculty Office', nasf:fOff, color:FICM.office },
       { label:'Core Facilities', nasf:corePerFloor, color:'var(--clrCore)' },
-      { label:'Community', nasf:commPerFloor, color:'var(--clrCommunity)' }
+      { label:'Community', nasf:fComm, color:'var(--clrCommunity)' }
     ];
     if (unassigned > 0) segments.push({ label:'', nasf:unassigned, color:FICM.supportB });
-    var floorCapacity = Math.max(d.researchFloorNASF, upperAssigned);
-    h += floorVis('Floor ' + f + (upperDeficit>0?' \u26a0':''), segments, floorCapacity, true, S.aboveGradeGSF, maxFloorGSF, upperDeficit > 0 ? d.researchFloorNASF : 0, pisPerFloorLabel);
+    var floorCapacity = Math.max(d.researchFloorNASF, fAssigned);
+    var pisLabel = (fPIs % 1 === 0) ? fPIs.toFixed(0) : fPIs.toFixed(1);
+    h += floorVis('Floor ' + f + (fDeficit>0?' \u26a0':''), segments, floorCapacity, true, S.aboveGradeGSF, maxFloorGSF, fDeficit > 0 ? d.researchFloorNASF : 0, pisLabel);
   }
 
   // Floor 1 (Ground) — GF program items + core allocation
@@ -1379,13 +1583,105 @@ function renderStacking(d) {
   h += '<span>Remaining: <strong style="color:'+(d.basementSurplus<0?'var(--coral)':'var(--green)')+'">'+(d.basementSurplus>=0?'+':'')+F(d.basementSurplus)+'</strong></span>';
   h += '</div></div>';
 
+  // ============================================================
+  // PI Floor Assignment Editor — assign PIs of each typology to specific
+  // upper research floors instead of distributing them evenly.
+  // ============================================================
+  h += '<div class="card"><div class="card-title">PI Floor Assignment</div>';
+  h += '<div class="card-sub">Assign each typology\'s PIs to specific research floors. Numbers in red mean a floor exceeds capacity, or a typology row\'s sum doesn\'t equal the upper-floor pool. Use <strong>Reset to even</strong> to redistribute. Basement-only PIs (assigned on the Basement tab) keep their lab in the basement and only desk + office count upstairs.</div>';
+  h += '<div style="overflow-x:auto"><table class="comp" style="font-size:.85rem">';
+  // Header row: Typology + each floor + Pool + Assigned
+  h += '<tr><th style="min-width:160px">Typology</th>';
+  for (var fh = 2; fh <= S.aboveGradeFloors; fh++) {
+    h += '<th style="min-width:80px;text-align:center">Floor '+fh+'</th>';
+  }
+  h += '<th style="min-width:80px;text-align:center">Assigned</th>';
+  h += '<th style="min-width:80px;text-align:center">Upper Pool</th>';
+  h += '<th style="min-width:60px;text-align:center">Δ</th>';
+  h += '</tr>';
+  // One row per typology with PIs > 0 (or that have any explicit assignment)
+  S.types.forEach(function(t) {
+    var basementPIs = (S.basementAllocation && S.basementAllocation[t.id]) || 0;
+    var pool = Math.max(0, (t.pis || 0) - basementPIs);
+    // Determine row visibility — show when typology has any PIs at all
+    if ((t.pis || 0) === 0) return;
+    var rowSum = 0;
+    var floorCells = '';
+    for (var fc2 = 2; fc2 <= S.aboveGradeFloors; fc2++) {
+      var k2 = String(fc2);
+      var v = piAlloc[k2][t.id] || 0;
+      rowSum += v;
+      floorCells += '<td style="text-align:center"><input type="number" min="0" step="1" value="'+v+'" style="width:60px;font-size:.85rem" onchange="setPIFloor('+fc2+',\''+t.id+'\',this.value)"></td>';
+    }
+    var delta = rowSum - pool;
+    var deltaColor = delta === 0 ? 'var(--green)' : 'var(--coral)';
+    var sumColor = delta === 0 ? 'var(--navy)' : 'var(--coral)';
+    h += '<tr>';
+    h += '<td><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:'+t.color+';margin-right:6px;vertical-align:middle"></span>'+t.label;
+    if (basementPIs > 0) h += ' <span style="font-size:.7rem;color:var(--mut)">(+'+basementPIs+' bsmt)</span>';
+    h += '</td>';
+    h += floorCells;
+    h += '<td style="text-align:center;font-weight:700;color:'+sumColor+'">'+rowSum+'</td>';
+    h += '<td style="text-align:center;color:var(--mut)">'+pool+'</td>';
+    h += '<td style="text-align:center;font-weight:700;color:'+deltaColor+'">'+(delta>=0?'+':'')+delta+'</td>';
+    h += '</tr>';
+  });
+  // Floor totals row
+  h += '<tr style="border-top:2px solid var(--navy);background:#f8f8f5">';
+  h += '<td style="font-weight:900;color:var(--navy)">Floor Total (PIs)</td>';
+  for (var ff = 2; ff <= S.aboveGradeFloors; ff++) {
+    var k3 = String(ff);
+    var total = 0;
+    S.types.forEach(function(t) { total += piAlloc[k3][t.id] || 0; });
+    h += '<td style="text-align:center;font-weight:900;color:var(--navy)">'+total+'</td>';
+  }
+  // Assigned grand total = sum of all upper floor PIs
+  var grandAssigned = 0, grandPool = 0;
+  S.types.forEach(function(t) {
+    var basementPIs = (S.basementAllocation && S.basementAllocation[t.id]) || 0;
+    grandPool += Math.max(0, (t.pis || 0) - basementPIs);
+    for (var ff2 = 2; ff2 <= S.aboveGradeFloors; ff2++) {
+      grandAssigned += piAlloc[String(ff2)][t.id] || 0;
+    }
+  });
+  h += '<td style="text-align:center;font-weight:900;color:var(--navy)">'+grandAssigned+'</td>';
+  h += '<td style="text-align:center;color:var(--mut)">'+grandPool+'</td>';
+  h += '<td style="text-align:center;font-weight:900;color:'+(grandAssigned===grandPool?'var(--green)':'var(--coral)')+'">'+(grandAssigned-grandPool>=0?'+':'')+(grandAssigned-grandPool)+'</td>';
+  h += '</tr>';
+  // Floor NASF row (lab + office assigned per floor)
+  h += '<tr style="background:#f0f7ff">';
+  h += '<td style="font-weight:700;color:var(--navy)">Lab + Office NASF</td>';
+  for (var ff3 = 2; ff3 <= S.aboveGradeFloors; ff3++) {
+    var k4 = String(ff3);
+    var floorTotal = floorBreak[k4].lab + floorBreak[k4].office;
+    var capPct = d.researchFloorNASF > 0 ? floorTotal / d.researchFloorNASF * 100 : 0;
+    var pctCol = capPct > 100 ? 'var(--coral)' : (capPct > 90 ? 'var(--gold)' : 'var(--mut)');
+    h += '<td style="text-align:center"><div style="font-family:\'IBM Plex Mono\',monospace;font-weight:700;color:var(--navy)">'+F(floorTotal)+'</div><div style="font-size:.7rem;color:'+pctCol+'">'+capPct.toFixed(0)+'% of NASF</div></td>';
+  }
+  h += '<td colspan="3" style="text-align:center;color:var(--mut);font-size:.78rem">Floor NASF capacity: '+F(d.researchFloorNASF)+'</td>';
+  h += '</tr>';
+  h += '</table></div>';
+  h += '<div style="margin-top:10px;display:flex;gap:8px;align-items:center">';
+  h += '<button class="btn btn-out btn-sm" onclick="resetPIFloorAllocation()">Reset to even</button>';
+  h += '<span style="font-size:.78rem;color:var(--mut)">Distributes the upper-floor pool evenly across all research floors. Floor totals turn green when assignments balance.</span>';
+  h += '</div>';
+  h += '</div>'; // close PI Floor Assignment card
+
   // Per-floor table
   h += '<div class="card"><div class="card-title">Per-Floor Area Summary</div>';
   h += '<table class="comp"><tr><th>Floor</th><th>PIs</th><th>GFA</th><th style="color:var(--teal)">DGSF</th><th>NASF</th><th style="color:var(--clrResearch)">Research Labs</th><th style="color:'+FICM.office+'">Faculty Office</th><th>Core</th><th>Community</th><th>Event</th><th>Unassigned</th></tr>';
   for (var f = topFloor; f >= 2; f--) {
-    var floorUnassigned = Math.max(0, d.researchFloorNASF - upperAssigned);
-    var overStyle = upperDeficit > 0 ? ' style="background:#FFEBEE"' : '';
-    h += '<tr'+overStyle+'><td style="font-weight:700">Floor '+f+(upperDeficit>0?' <span style="color:#E53935">\u26a0</span>':'')+'</td><td style="font-weight:700;color:var(--clrResearch)">'+pisPerFloorLabel+'</td><td>'+F(S.aboveGradeGSF)+'</td><td style="color:var(--teal)">'+F(Math.round(S.aboveGradeGSF*S.deptGrossPct))+'</td><td>'+F(d.researchFloorNASF)+'</td><td>'+F(labPerFloor)+'</td><td>'+F(officePerFloor)+'</td><td>'+F(corePerFloor)+'</td><td>'+F(commPerFloor)+'</td><td>\u2014</td><td>'+F(floorUnassigned)+'</td></tr>';
+    var fk = String(f);
+    var fLab = floorBreak[fk].lab;
+    var fOff = floorBreak[fk].office;
+    var fPIs = floorBreak[fk].pis;
+    var fComm = d.upperCommunityByFloor[fk] || 0;
+    var fAssigned = fLab + fOff + corePerFloor + fComm;
+    var fDeficit = Math.max(0, fAssigned - d.researchFloorNASF);
+    var floorUnassigned = Math.max(0, d.researchFloorNASF - fAssigned);
+    var overStyle = fDeficit > 0 ? ' style="background:#FFEBEE"' : '';
+    var pisLabel = (fPIs % 1 === 0) ? fPIs.toFixed(0) : fPIs.toFixed(1);
+    h += '<tr'+overStyle+'><td style="font-weight:700">Floor '+f+(fDeficit>0?' <span style="color:#E53935">\u26a0</span>':'')+'</td><td style="font-weight:700;color:var(--clrResearch)">'+pisLabel+'</td><td>'+F(S.aboveGradeGSF)+'</td><td style="color:var(--teal)">'+F(Math.round(S.aboveGradeGSF*S.deptGrossPct))+'</td><td>'+F(d.researchFloorNASF)+'</td><td>'+F(fLab)+'</td><td>'+F(fOff)+'</td><td>'+F(corePerFloor)+'</td><td>'+F(fComm)+'</td><td>\u2014</td><td>'+F(floorUnassigned)+'</td></tr>';
   }
   var gfOverStyle = gfDeficit > 0 ? ' style="background:#FFEBEE"' : '';
   h += '<tr'+gfOverStyle+'><td style="font-weight:700">Floor 1 (Ground)'+(gfDeficit>0?' <span style="color:#E53935">\u26a0</span>':'')+'</td><td style="color:var(--mut)">\u2014</td><td>'+F(S.aboveGradeGSF)+'</td><td style="color:var(--teal)">'+F(Math.round(S.aboveGradeGSF*S.deptGrossPct))+'</td><td>'+F(d.gfNASF)+'</td><td>\u2014</td><td>\u2014</td><td>'+F(gfCoreNASF)+'</td><td>'+F(d.gfCommunity)+'</td><td>'+F(d.eventNASF)+'</td><td>'+F(gfRemaining)+'</td></tr>';
@@ -2586,6 +2882,69 @@ function buildPresetScenarios() {
         // Fit GF: Eng Learn 4500→2750 (GF programs 21000→19250 = gfNASF)
         S.gfProgram[3].nasf = 2750;
         // Fit Bsmt: Battery 3000→1750 (core 19000→17750 = basementNASF)
+        S.coreItems[4].nasf = 1750;
+      }
+    },
+    {
+      // Baseline V2 \u2014 same PI mix as Baseline, but uses the new floor-level
+      // controls: PIs are explicitly assigned to specific upper floors and the
+      // upper-community items are placed on specific floors instead of
+      // repeating uniformly. Reflects the dashboard JSON state captured
+      // 2026-04-28 with refined ground-floor program (Eng Commons + Cafe +
+      // Colloquium + 2 Classrooms + Loading + Bldg Support) and an expanded
+      // upper-community list (Living Room, Focus Room, Pantry, Meeting Rooms,
+      // Wellness, Farley/Clubs).
+      name: '1B \u2014 Baseline Scenario V2',
+      desc: 'Same PI mix as Baseline, now using the new per-floor PI assignment and per-floor community placement. Captures the 2026-04-28 dashboard JSON: refined GF program, expanded upper-community list (Lounge, Focus, Pantry, Meeting, Wellness, Farley), 30 PIs, 22% core.',
+      tweaks: function() {
+        // Envelope (matches imported JSON)
+        S.basementGSF = 40000;
+        S.aboveGradeGSF = 34000;
+        S.penthouseGSF = 24500;
+        // PI mix (same crosswalk as v1)
+        S.types[0].pis=8;  S.types[1].pis=2;  S.types[2].pis=10;
+        S.types[3].pis=4;  S.types[4].pis=3;  S.types[5].pis=1; S.types[6].pis=2;
+        S.totalPIs = 30;
+        // Ground-floor program from the 2026-04-28 capture
+        S.gfProgram = [
+          { name:'Eng Commons',                                nasf:6000, on:true,  cat:'community' },
+          { name:'Colloquium / Flex, 100p at Round Tables',    nasf:4000, on:true,  cat:'event'     },
+          { name:'Cafe',                                       nasf:1900, on:true,  cat:'community' },
+          { name:'2 Classrooms, 40 Seats each',                nasf:2400, on:true,  cat:'event'     },
+          { name:'Loading',                                    nasf:2000, on:true,  cat:'support'   },
+          { name:'Bldg Support (Storage, IT, Ops)',            nasf:2000, on:true,  cat:'support'   }
+        ];
+        // Refined upper-community items from the JSON capture, with new floor
+        // assignments demonstrating the V2 capability:
+        //   Lounge, Focus Room, Pantry, Wellness repeat on every floor
+        //   Meeting Room (8-10) is placed on Floor 2 (basement-adjacent collab)
+        //   Farley Center / Clubs is placed on Floor 4 (top-floor anchor)
+        S.upperCommunity = [
+          { name:'Living Room / Lounge',                                  nasf:800,  on:true, floor:'all' },
+          { name:'Focus Room (2 People)',                                 nasf:600,  on:true, floor:'all' },
+          { name:'Pantry',                                                nasf:500,  on:true, floor:'all' },
+          { name:'Meeting Room (8-10) People',                            nasf:850,  on:true, floor:'2'   },
+          { name:'Wellness Room/ Lactation Room',                         nasf:100,  on:true, floor:'all' },
+          { name:'Farley Center/ Clubs Distributed (12K Total, TS Help)', nasf:0,    on:true, floor:'4'   }
+        ];
+        // Per-floor PI assignment (excludes basement-only PIs).
+        // Basement-only PIs (Wet Bio 3, Wet Chem 3, Optics 2, Optnano 2) keep
+        // their lab in the basement; only their desks + offices count upstairs.
+        // Pool sizes:
+        //   wetbio  upper = 8 - 3 = 5
+        //   wetchem upper = 2 - 3 = 0 (clipped)
+        //   dryelec upper = 10 - 0 = 10
+        //   comp    upper = 4 - 0 = 4
+        //   optics  upper = 3 - 2 = 1
+        //   optnano upper = 1 - 2 = 0 (clipped)
+        //   custom_1775851246404 upper = 2 - 0 = 2
+        S.piFloorAllocation = {
+          '2': { wetbio:2, wetchem:0, dryelec:2, comp:0, optics:1, optnano:0, custom_1775851246404:1 },
+          '3': { wetbio:2, wetchem:0, dryelec:3, comp:1, optics:0, optnano:0, custom_1775851246404:1 },
+          '4': { wetbio:1, wetchem:0, dryelec:5, comp:3, optics:0, optnano:0, custom_1775851246404:0 }
+        };
+        S.basementAllocation = { wetbio:3, wetchem:3, dryelec:0, comp:0, optics:2, optnano:2, custom_1775851246404:0 };
+        // Core item adjustment (matches Baseline tweak)
         S.coreItems[4].nasf = 1750;
       }
     },
@@ -3940,9 +4299,13 @@ function _legacyExportXLSXStub() {
   commRows.push(['GF Event NASF', d.eventNASF, '', '']);
   commRows.push(['GF Support NASF', d.gfSupport, '', '']);
   commRows.push([]);
-  commRows.push(['UPPER FLOOR COMMUNITY (per research floor)']);
-  commRows.push(['Space','NASF per Floor','Included']);
-  S.upperCommunity.forEach(function(u) { commRows.push([u.name, u.nasf, u.on ? 'Yes' : 'No']); });
+  commRows.push(['UPPER FLOOR COMMUNITY']);
+  commRows.push(['Space','NASF','Floor Assignment','Included']);
+  S.upperCommunity.forEach(function(u) {
+    var fl = u.floor || 'all';
+    var flLabel = fl === 'all' ? 'All floors' : ('Floor ' + fl);
+    commRows.push([u.name, u.nasf, flLabel, u.on ? 'Yes' : 'No']);
+  });
   commRows.push([]);
   commRows.push(['Per Floor Total', d.upperCommunityPerFloor, '']);
   commRows.push(['Upper Community Total (\u00d7' + d.researchFloors + ' floors)', d.upperCommunityTotal, '']);
@@ -4463,6 +4826,49 @@ function mountRadar() {
       .attr('fill','#404040').text(sc.name);
   });
 }
+
+// ============================================================
+// PRINT HANDLER (fix: dashboard was resetting on print)
+// ============================================================
+// Why this exists: clicking Print while focus was on a number/text input meant
+// pending edits never fired their onchange (which is what writes back to S),
+// and some browsers re-trigger render-affecting layout events around the print
+// dialog. The combined effect was that user edits appeared to "reset" after
+// printing. This handler:
+//   1. Commits any pending input by blurring the active element first.
+//   2. Snapshots the active tab and a deep copy of S so we can restore.
+//   3. Calls window.print() (synchronous in most browsers).
+//   4. After print (or whenever the layout returns), re-renders the same tab
+//      so the visible state matches S exactly. No state is lost.
+var _preprintTab = null;
+function printDashboard() {
+  try {
+    if (document.activeElement && typeof document.activeElement.blur === 'function') {
+      document.activeElement.blur();
+    }
+  } catch(e) {}
+  _preprintTab = activeTab;
+  // Defer slightly so any onchange / onblur queued by the blur above can flush
+  setTimeout(function() {
+    try { window.print(); } catch(e) {}
+  }, 60);
+}
+window.onbeforeprint = function() {
+  try {
+    if (document.activeElement && typeof document.activeElement.blur === 'function') {
+      document.activeElement.blur();
+    }
+  } catch(e) {}
+  if (_preprintTab === null) _preprintTab = activeTab;
+};
+window.onafterprint = function() {
+  // Restore the user's tab and re-render so any inputs reflect the saved S
+  if (_preprintTab !== null) {
+    activeTab = _preprintTab;
+    _preprintTab = null;
+  }
+  try { render(); } catch(e) {}
+};
 
 // ============================================================
 // INIT
