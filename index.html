@@ -246,8 +246,19 @@ var S = {
   // Large Lab constituent mix (maps to real typologies for EUI & cost)
   largeMix: { wetbio: 0.50, wetchem: 0.50 },
 
-  // Basement research allocation (% of basement NASF allocated to PI research)
+  // Basement research allocation (legacy — replaced by basementAllocation map below)
+  // Kept on the state object so JSON imports from older versions don't break.
   basementResearchPct: 0.0,
+
+  // Basement Lab Allocation (per-PI-typology) — number of PIs of each type
+  // whose LAB + LAB SUPPORT is physically located in the basement. Their
+  // desks, faculty office, and flex office always remain on upper research
+  // floors regardless of where their lab sits.
+  // Keys are S.types[i].id values.
+  basementAllocation: {
+    wetbio: 3, wetchem: 3, dryelec: 0, comp: 0,
+    optics: 2, optnano: 2, custom_1775851246404: 0
+  },
 
   // Tab 9 - Cost (Vermeulens Q4 2025 base rates, Evanston IL, CMAR)
   deptGrossPct: 0.85, // Departmental Gross as % of GSF (remainder is MEP/infrastructure)
@@ -459,13 +470,65 @@ function C() {
 
   var buildingEUI = totalGSF > 0 ? totalKBTU / totalGSF : 0;
 
-  // Basement research allocation
-  var basementResearchNASF = Math.round(basementNASF * S.basementResearchPct);
+  // ──────────────────────────────────────────────────────────
+  // Basement Lab Allocation (per-typology PI placement)
+  // ──────────────────────────────────────────────────────────
+  // For each typology, basementPIs of its PIs have their lab + lab support
+  // physically in the basement. Their desks + offices stay on upper floors.
+  var basementLabNASF = 0;
+  var upperLabNASF = 0;
+  var allOfficeDeskNASF = 0;   // every PI's desks + offices (always upper)
+  var basementByType = [];     // for UI/breakdown
+
+  S.types.forEach(function(t) {
+    var maxBsmt = t.pis;
+    var bp = (S.basementAllocation && S.basementAllocation[t.id] !== undefined)
+             ? S.basementAllocation[t.id] : 0;
+    bp = Math.max(0, Math.min(maxBsmt, parseInt(bp) || 0));
+    // If typology has no lab portion (computational), force basement allocation to 0
+    var labPerPI = t.fteCount * (t.openLabPerFTE + t.labSupportPerFTE);
+    if (labPerPI <= 0) bp = 0;
+
+    var officeDeskPerPI = t.fteCount * t.deskPerFTE + t.facultyOffice + t.flexOffice;
+    basementLabNASF += bp * labPerPI;
+    upperLabNASF    += (t.pis - bp) * labPerPI;
+    allOfficeDeskNASF += t.pis * officeDeskPerPI;
+
+    basementByType.push({
+      id:t.id, label:t.label, color:t.color, totalPIs:t.pis,
+      basementPIs:bp, labPerPI:labPerPI, basementLabNASF: bp * labPerPI,
+      hasLab: labPerPI > 0,
+    });
+  });
+
+  // Basement capacity check: lab allocation + cores all need to fit
+  // (cores are assumed basement-located via existing coreFloorSplit default {basement:1, ground:0, research:0})
+  var basementCoreNASF = Math.round(coreNASF * (S.coreFloorSplit ? S.coreFloorSplit.basement : 1));
+  var basementUsed = basementLabNASF + basementCoreNASF;
+  var basementCapacity = basementNASF;  // alias for clarity
+  var basementSurplus = basementCapacity - basementUsed;
+
+  // Upper-floor (research floors) demand check
+  // Upper floors hold: all PIs' offices+desks, upper-located PIs' labs, and
+  // upper-floor community (per research floor × N floors).
+  var upperFloorDemand = upperLabNASF + allOfficeDeskNASF + upperCommunityTotal;
+  var upperFloorCapacity = researchFloors * researchFloorNASF;
+  var upperFloorSurplus = upperFloorCapacity - upperFloorDemand;
+
+  // Legacy field — kept for backward compat with anything that still reads it.
+  // Now reflects the actual lab allocation in basement (not the old % slider).
+  var basementResearchNASF = basementLabNASF;
 
   return {
     totalGSF:totalGSF, totalNASF:totalNASF, overallEff:overallEff,
     researchFloors:researchFloors, researchFloorNASF:researchFloorNASF,
     gfNASF:gfNASF, basementNASF:basementNASF, basementResearchNASF:basementResearchNASF,
+    basementLabNASF:basementLabNASF, basementCoreNASF:basementCoreNASF,
+    basementUsed:basementUsed, basementCapacity:basementCapacity, basementSurplus:basementSurplus,
+    basementByType:basementByType,
+    upperLabNASF:upperLabNASF, allOfficeDeskNASF:allOfficeDeskNASF,
+    upperFloorDemand:upperFloorDemand, upperFloorCapacity:upperFloorCapacity,
+    upperFloorSurplus:upperFloorSurplus,
     communityNASF:communityNASF, communityNASFActual:communityNASFActual,
     eventNASF:eventNASF, piNASF:piNASF, totalPIs:totalPIs, totalFTEs:totalFTEs,
     typeBreakdown:typeBreakdown, coreNASF:coreNASF, coreTarget:coreTarget,
@@ -568,7 +631,7 @@ function P(n) { return Math.round(n * 100) + '%'; }
 // ============================================================
 // TABS
 // ============================================================
-var TABS = ['Project Size','PI Typologies','Building Mix','Core Facilities','Community','Floor Stacking','Scenarios','Energy','Cost','Neighborhood','Visualizations'];
+var TABS = ['Project Size','PI Typologies','Building Mix','Basement','Community','Floor Stacking','Scenarios','Energy','Cost','Neighborhood','Visualizations'];
 var activeTab = 0;
 
 function renderTabs() {
@@ -615,7 +678,7 @@ function render() {
   if (activeTab === 0) el.innerHTML = renderProjectSize(d);
   else if (activeTab === 1) el.innerHTML = renderTypologies(d);
   else if (activeTab === 2) el.innerHTML = renderMix(d);
-  else if (activeTab === 3) el.innerHTML = renderCore(d);
+  else if (activeTab === 3) el.innerHTML = renderBasement(d);
   else if (activeTab === 4) el.innerHTML = renderCommunity(d);
   else if (activeTab === 5) el.innerHTML = renderStacking(d);
   else if (activeTab === 6) el.innerHTML = renderScenarios(d);
@@ -922,25 +985,78 @@ function setPIs(i, val) { S.types[i].pis = parseInt(val); render(); }
 // ============================================================
 // TAB 4: CORE FACILITIES
 // ============================================================
-function renderCore(d) {
-  var h = '<div class="g2">';
-  h += '<div class="card"><div class="card-title">Core Facility Allocation</div>';
-  h += '<div class="card-sub">Benchmark range: 15\u201322% of research NASF</div>';
-  h += sl('Core % of Research NASF', 'corePct', Math.round(S.corePct*100), 5, 35, 1, '%', true);
-  h += '<div style="margin:10px 0;display:flex;gap:8px;flex-wrap:wrap">';
-  [{n:'Columbia',v:22},{n:'Ragon',v:20},{n:'GT EBB',v:19},{n:'Penn St',v:15},{n:'BU CDS',v:11}].forEach(function(p){
-    h += '<span class="badge" style="background:'+((Math.round(S.corePct*100)===p.v)?'var(--navy);color:#fff':'#eee;color:var(--navy)')+'">'+p.n+': '+p.v+'%</span>';
-  });
+function renderBasement(d) {
+  var h = '';
+
+  // \u2500\u2500 Top-level metrics \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+  var utilPct = d.basementCapacity > 0 ? (d.basementUsed / d.basementCapacity * 100) : 0;
+  var basementOver = d.basementSurplus < 0;
+  var upperOver = d.upperFloorSurplus < 0;
+
+  h += '<div class="card"><div class="card-title">Basement \u2014 Allocation Overview</div>';
+  h += '<div class="card-sub">Place PI typology labs and core facilities into the basement. Desks, faculty offices, and flex offices for all PIs always remain on upper research floors regardless of where their lab sits.</div>';
+  h += '<div class="ms" style="margin-top:8px">';
+  h += '<div class="m"><div class="mv">'+F(d.basementCapacity)+'</div><div class="ml">Basement NASF Capacity</div></div>';
+  h += '<div class="m"><div class="mv">'+F(d.basementUsed)+'</div><div class="ml">Currently Allocated</div></div>';
+  h += '<div class="m"><div class="mv" style="color:'+(basementOver?'var(--coral)':'var(--green)')+'">'+(d.basementSurplus>=0?'+':'')+F(d.basementSurplus)+'</div><div class="ml">'+(basementOver?'Over by':'Remaining')+'</div></div>';
+  h += '<div class="m"><div class="mv">'+utilPct.toFixed(0)+'%</div><div class="ml">Utilization</div></div>';
   h += '</div>';
-  h += bigRow('Target Core NASF (@ '+P(S.corePct)+')', F(d.coreTarget));
-  h += bigRow('Itemized Core NASF', F(d.coreNASF));
-  var coreDiff = d.coreNASF - d.coreTarget;
-  var coreCls = coreDiff <= 0 ? 'under' : 'over';
-  h += '<div style="display:flex;justify-content:space-between;padding:8px 0;border-top:2px solid var(--navy)"><span style="font-weight:700">vs. Target</span><span class="'+coreCls+'" style="font-family:\'IBM Plex Mono\',monospace;font-size:1.1rem;font-weight:700">'+(coreDiff>=0?'+':'')+F(coreDiff)+' NASF</span></div>';
+  // Stacked bar showing lab + core allocation
+  h += '<div class="bar-budget" style="margin-top:14px">';
+  if (d.basementCapacity > 0) {
+    var labW = Math.min(100, d.basementLabNASF / d.basementCapacity * 100);
+    var coreW = Math.min(100 - labW, d.basementCoreNASF / d.basementCapacity * 100);
+    if (labW > 0)  h += '<div style="width:'+labW+'%;background:var(--clrResearch)" title="Lab Allocation: '+F(d.basementLabNASF)+'"></div>';
+    if (coreW > 0) h += '<div style="width:'+coreW+'%;background:var(--clrCore)" title="Core Facilities: '+F(d.basementCoreNASF)+'"></div>';
+  }
+  h += '</div>';
+  h += '<div class="legend">';
+  h += '<div class="legend-item"><div class="legend-dot" style="background:var(--clrResearch)"></div>Lab Allocation '+F(d.basementLabNASF)+'</div>';
+  h += '<div class="legend-item"><div class="legend-dot" style="background:var(--clrCore)"></div>Core Facilities '+F(d.basementCoreNASF)+'</div>';
+  h += '<div class="legend-item"><div class="legend-dot" style="background:#eee"></div>Remaining '+F(Math.max(0, d.basementSurplus))+'</div>';
+  h += '</div>';
+  if (basementOver) {
+    h += '<div class="note" style="margin-top:10px;background:#FCDEDE;border-color:#E5979F;color:#9E2A30">\u26a0 Basement is over capacity by '+F(-d.basementSurplus)+' NASF. Reduce allocations, increase basement GSF (Project Size tab), or raise basement efficiency.</div>';
+  }
+  if (upperOver) {
+    h += '<div class="note" style="margin-top:10px;background:#FCDEDE;border-color:#E5979F;color:#9E2A30">\u26a0 Upper research floors over capacity by '+F(-d.upperFloorSurplus)+' NASF. Place more typologies in basement to relieve, or add an above-grade floor.</div>';
+  }
   h += '</div>';
 
-  h += '<div class="card"><div class="card-title">Core Facility Checklist</div>';
-  h += '<div class="card-sub">Toggle facilities on/off. Edit names and NASF to adjust.</div>';
+  // \u2500\u2500 Research Lab Allocation \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+  h += '<div class="card"><div class="card-title">Research Lab Allocation \u2014 PIs in Basement</div>';
+  h += '<div class="card-sub">For each typology, choose how many PIs have their lab + lab support physically in the basement. Computational typologies have no lab portion to allocate.</div>';
+  h += '<table class="comp"><thead><tr>';
+  h += '<th>Typology</th><th>Total PIs</th><th>PIs in Basement</th><th>Lab+Support / PI</th><th>Basement Lab NASF</th>';
+  h += '</tr></thead><tbody>';
+  d.basementByType.forEach(function(bt) {
+    h += '<tr>';
+    h += '<td style="font-weight:600;color:var(--navy)"><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:'+bt.color+';margin-right:8px;vertical-align:middle"></span>'+bt.label+'</td>';
+    h += '<td>'+bt.totalPIs+'</td>';
+    if (!bt.hasLab) {
+      h += '<td colspan="2" style="color:var(--mut);font-style:italic">no lab portion \u2014 stays on upper floors</td>';
+      h += '<td>0</td>';
+    } else if (bt.totalPIs <= 0) {
+      h += '<td colspan="2" style="color:var(--mut);font-style:italic">0 PIs assigned</td>';
+      h += '<td>0</td>';
+    } else {
+      h += '<td><div style="display:flex;align-items:center;gap:8px"><input type="range" min="0" max="'+bt.totalPIs+'" step="1" value="'+bt.basementPIs+'" oninput="setBasementAlloc(\''+bt.id+'\',this.value)" style="flex:1;accent-color:var(--navy)"><input type="number" min="0" max="'+bt.totalPIs+'" step="1" value="'+bt.basementPIs+'" onchange="setBasementAlloc(\''+bt.id+'\',this.value)" style="width:60px"></div></td>';
+      h += '<td>'+F(bt.labPerPI)+' sf</td>';
+      h += '<td style="font-weight:700;color:var(--navy)">'+F(bt.basementLabNASF)+'</td>';
+    }
+    h += '</tr>';
+  });
+  h += '<tr style="background:var(--bg);font-weight:700;border-top:2px solid var(--navy)">';
+  h += '<td colspan="4" style="padding-left:16px">Lab Subtotal in Basement</td>';
+  h += '<td style="color:var(--clrResearch);font-size:1.05rem">'+F(d.basementLabNASF)+'</td>';
+  h += '</tr></tbody></table>';
+  h += '<div style="margin-top:10px;font-size:.82rem;color:var(--mut);font-style:italic">\u24d8 Desks ('+F(d.bldgDesk||0)+' sf), faculty offices, and flex offices for <strong>all</strong> PIs (whether basement- or upper-located) total '+F(d.allOfficeDeskNASF)+' sf and stay on upper research floors.</div>';
+  h += '</div>';
+
+  // \u2500\u2500 Core Facilities (existing list, basement-located) \u2500\u2500\u2500\u2500\u2500\u2500\u2500
+  h += '<div class="g2">';
+  h += '<div class="card"><div class="card-title">Core Facilities \u2014 Checklist</div>';
+  h += '<div class="card-sub">Cores are basement-located by default. Toggle on/off, edit names and NASF.</div>';
   S.coreItems.forEach(function(c, i) {
     var bg = c.on ? 'var(--clrCore)' : '#ddd';
     h += '<div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--bdr)">';
@@ -957,36 +1073,47 @@ function renderCore(d) {
   h += '<span style="font-size:1.1rem;font-weight:900;color:var(--navy)">Total Core NASF</span>';
   h += '<span style="font-family:\'IBM Plex Mono\',monospace;font-size:1.5rem;font-weight:700;color:var(--clrCore)">'+F(d.coreNASF)+'</span></div>';
   h += '<div style="margin-top:8px"><button class="btn btn-navy btn-sm" onclick="addCore()">+ Add Core Facility</button></div>';
-  h += '</div></div>';
-
-  h += '<div class="card"><div class="card-title">Core Facilities \u2014 NASF Breakdown</div>';
-  var coreData = S.coreItems.filter(function(c){return c.on}).map(function(c){return {label:c.name, totalNASF:c.nasf, color:'var(--clrCore)'}});
-  h += renderBarChart(coreData, 'totalNASF', 'label', 'color');
   h += '</div>';
 
-  // Core floor allocation
-  var cs = S.coreFloorSplit;
-  var bsmtCore = Math.round(d.coreNASF * cs.basement);
-  var gfCore = Math.round(d.coreNASF * cs.ground);
-  var resCore = d.coreNASF - bsmtCore - gfCore;
-  var resCorePerFloor = d.researchFloors > 0 ? Math.round(resCore / d.researchFloors) : 0;
+  // Core target benchmark sidebar
+  h += '<div class="card"><div class="card-title">Core Target Benchmark</div>';
+  h += '<div class="card-sub">Benchmark range: 15\u201322% of research NASF</div>';
+  h += sl('Core % of Research NASF', 'corePct', Math.round(S.corePct*100), 5, 35, 1, '%', true);
+  h += '<div style="margin:10px 0;display:flex;gap:8px;flex-wrap:wrap">';
+  [{n:'Columbia',v:22},{n:'Ragon',v:20},{n:'GT EBB',v:19},{n:'Penn St',v:15},{n:'BU CDS',v:11}].forEach(function(p){
+    h += '<span class="badge" style="background:'+((Math.round(S.corePct*100)===p.v)?'var(--navy);color:#fff':'#eee;color:var(--navy)')+'">'+p.n+': '+p.v+'%</span>';
+  });
+  h += '</div>';
+  h += bigRow('Target Core NASF (@ '+P(S.corePct)+')', F(d.coreTarget));
+  h += bigRow('Itemized Core NASF', F(d.coreNASF));
+  var coreDiff = d.coreNASF - d.coreTarget;
+  var coreCls = coreDiff <= 0 ? 'under' : 'over';
+  h += '<div style="display:flex;justify-content:space-between;padding:8px 0;border-top:2px solid var(--navy)"><span style="font-weight:700">vs. Target</span><span class="'+coreCls+'" style="font-family:\'IBM Plex Mono\',monospace;font-size:1.1rem;font-weight:700">'+(coreDiff>=0?'+':'')+F(coreDiff)+' NASF</span></div>';
+  h += '</div>';
+  h += '</div>';   // close .g2
 
-  h += '<div class="card"><div class="card-title">Core Floor Allocation</div>';
-  h += '<div class="card-sub">Set what percentage of core NASF goes to each zone. The remainder goes to research floors.</div>';
-
-  h += '<label class="sl">Basement Core %</label>';
-  h += '<div class="sl-row"><input type="range" min="0" max="100" step="5" value="'+Math.round(cs.basement*100)+'" oninput="setCoreSplit(\'basement\',this.value)"><div class="sl-val">'+Math.round(cs.basement*100)+'%</div></div>';
-
-  h += '<label class="sl">Ground Floor Core %</label>';
-  h += '<div class="sl-row"><input type="range" min="0" max="100" step="5" value="'+Math.round(cs.ground*100)+'" oninput="setCoreSplit(\'ground\',this.value)"><div class="sl-val">'+Math.round(cs.ground*100)+'%</div></div>';
-
-  h += '<div style="padding-top:8px;border-top:1px solid var(--bdr)">';
-  h += bigRow('Research Floors', Math.round((1 - cs.basement - cs.ground)*100) + '% \u2192 ' + F(resCore) + ' NASF (' + F(resCorePerFloor) + '/floor)');
-  h += bigRow('Basement', Math.round(cs.basement*100) + '% \u2192 ' + F(bsmtCore) + ' NASF');
-  h += bigRow('Ground Floor', Math.round(cs.ground*100) + '% \u2192 ' + F(gfCore) + ' NASF');
-  h += '</div></div>';
+  // \u2500\u2500 Upper-floor capacity check \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+  h += '<div class="card"><div class="card-title">Upper Research Floors \u2014 Capacity Check</div>';
+  h += '<div class="card-sub">What still needs to fit on upper research floors after the basement allocation above</div>';
+  h += '<div class="ms">';
+  h += '<div class="m"><div class="mv">'+F(d.upperFloorCapacity)+'</div><div class="ml">Upper Capacity (NASF)</div></div>';
+  h += '<div class="m"><div class="mv">'+F(d.upperFloorDemand)+'</div><div class="ml">Demand</div></div>';
+  h += '<div class="m"><div class="mv" style="color:'+(upperOver?'var(--coral)':'var(--green)')+'">'+(d.upperFloorSurplus>=0?'+':'')+F(d.upperFloorSurplus)+'</div><div class="ml">'+(upperOver?'Over by':'Remaining')+'</div></div>';
+  h += '</div>';
+  h += '<div style="margin-top:10px;font-size:.85rem;color:var(--mut)">Demand breakdown: '+F(d.upperLabNASF)+' upper-located labs + '+F(d.allOfficeDeskNASF)+' total offices/desks + '+F(d.upperCommunityTotal)+' upper-floor community</div>';
+  h += '</div>';
 
   return h;
+}
+
+// Set basement PI allocation for a typology
+function setBasementAlloc(typeId, val) {
+  if (!S.basementAllocation) S.basementAllocation = {};
+  var t = S.types.find(function(x){return x.id===typeId;});
+  var max = t ? t.pis : 0;
+  var v = Math.max(0, Math.min(max, parseInt(val) || 0));
+  S.basementAllocation[typeId] = v;
+  render();
 }
 
 function setCoreSplit(zone, val) {
@@ -1242,16 +1369,14 @@ function renderStacking(d) {
   h += '</div>';
   h += '</div>';
 
-  // Basement research allocation control
-  h += '<div class="card"><div class="card-title">Basement Research Allocation</div>';
-  h += '<div class="card-sub">Allocate a portion of basement NASF to faculty research space (in addition to core facilities).</div>';
-  h += '<label class="sl">% of Basement NASF for Research</label>';
-  h += '<div class="sl-row"><input type="range" min="0" max="0.50" step="0.05" value="'+S.basementResearchPct+'" oninput="setBasementResearch(this.value)"><div class="sl-val">'+(S.basementResearchPct*100).toFixed(0)+'%</div></div>';
-  h += '<div style="display:flex;gap:16px;flex-wrap:wrap;margin-top:6px;font-size:.88rem;color:var(--mut)">';
-  h += '<span>Basement NASF: <strong style="color:var(--navy)">'+F(d.basementNASF)+'</strong></span>';
-  h += '<span>Research: <strong style="color:var(--clrResearch)">'+F(bsmtResearch)+'</strong></span>';
-  h += '<span>Core: <strong style="color:var(--clrCore)">'+F(bsmtCoreNASF)+'</strong></span>';
-  h += '<span>Support: <strong style="color:var(--clrSupport)">'+F(bsmtOther)+'</strong></span>';
+  // Basement summary (read-only — actual allocation is on Basement tab)
+  h += '<div class="card"><div class="card-title">Basement Allocation Summary</div>';
+  h += '<div class="card-sub">Detailed per-typology allocation is on the <strong>Basement</strong> tab.</div>';
+  h += '<div style="display:flex;gap:16px;flex-wrap:wrap;margin-top:6px;font-size:.95rem">';
+  h += '<span>Capacity: <strong style="color:var(--navy)">'+F(d.basementCapacity)+'</strong> NASF</span>';
+  h += '<span>Lab Allocation: <strong style="color:var(--clrResearch)">'+F(d.basementLabNASF)+'</strong></span>';
+  h += '<span>Core Facilities: <strong style="color:var(--clrCore)">'+F(d.basementCoreNASF)+'</strong></span>';
+  h += '<span>Remaining: <strong style="color:'+(d.basementSurplus<0?'var(--coral)':'var(--green)')+'">'+(d.basementSurplus>=0?'+':'')+F(d.basementSurplus)+'</strong></span>';
   h += '</div></div>';
 
   // Per-floor table
