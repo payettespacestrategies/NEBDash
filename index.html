@@ -127,10 +127,12 @@ footer .ft-right{display:flex;align-items:center;gap:12px}
 <div class="tabs" id="tabBar"></div>
 <div class="ms" id="metrics"></div>
 <div id="content"></div>
-<footer><div class="ft-left"><button class="btn btn-navy" onclick="exportJSON()">Export JSON</button><button class="btn btn-navy" onclick="exportXLSX()">Export Excel</button><button class="btn btn-out" onclick="window.print()">Print</button></div><div class="ft-right"><span id="ts"></span></div></footer>
+<footer><div class="ft-left"><button class="btn btn-navy" onclick="exportJSON()">Export JSON</button><button class="btn btn-out" onclick="document.getElementById('importJsonInput').click()">Import JSON</button><input type="file" id="importJsonInput" accept=".json,application/json" style="display:none" onchange="importJSON(event)"><button class="btn btn-navy" onclick="exportXLSX()">Export Excel</button><button class="btn btn-out" onclick="window.print()">Print</button></div><div class="ft-right"><span id="ts"></span></div></footer>
 </div>
 
-<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx-js-style@1.2.0/dist/xlsx.bundle.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.9.0/d3.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/d3-sankey@0.12.3/dist/d3-sankey.min.js"></script>
 <script>
 // ============================================================
 // LOGIN
@@ -566,7 +568,7 @@ function P(n) { return Math.round(n * 100) + '%'; }
 // ============================================================
 // TABS
 // ============================================================
-var TABS = ['Project Size','PI Typologies','Building Mix','Core Facilities','Community','Floor Stacking','Scenarios','Energy','Cost','Neighborhood'];
+var TABS = ['Project Size','PI Typologies','Building Mix','Core Facilities','Community','Floor Stacking','Scenarios','Energy','Cost','Neighborhood','Visualizations'];
 var activeTab = 0;
 
 function renderTabs() {
@@ -620,6 +622,7 @@ function render() {
   else if (activeTab === 7) el.innerHTML = renderEnergy(d);
   else if (activeTab === 8) el.innerHTML = renderCost(d);
   else if (activeTab === 9) el.innerHTML = renderLabModule();
+  else if (activeTab === 10) { el.innerHTML = renderVisualizations(d); mountD3Visuals(d); }
   document.getElementById('ts').textContent = new Date().toLocaleString();
 }
 
@@ -3069,54 +3072,715 @@ function exportJSON() {
   a.click();
 }
 
+function importJSON(event) {
+  var file = event.target.files && event.target.files[0];
+  if (!file) return;
+  var reader = new FileReader();
+  reader.onload = function(e) {
+    try {
+      var loaded = JSON.parse(e.target.result);
+      if (typeof loaded !== 'object' || loaded === null) throw new Error('JSON root must be an object');
+      // Expected to match the schema produced by exportJSON() — i.e. the dashboard's S.
+      // Sanity check: at least one of the core keys must be present.
+      var expectedKeys = ['types','coreItems','gfProgram','upperCommunity','basementGSF','aboveGradeGSF'];
+      var hits = expectedKeys.filter(function(k){ return Object.prototype.hasOwnProperty.call(loaded, k); }).length;
+      if (hits === 0) throw new Error('File does not look like an NEB Dashboard export.');
+      if (!confirm('Replace current dashboard state with imported JSON?\n\n' +
+                   'File: ' + file.name + '\n' +
+                   'Detected keys: ' + hits + ' / ' + expectedKeys.length + '\n\n' +
+                   'This cannot be undone. Click OK to proceed.')) {
+        event.target.value = '';
+        return;
+      }
+      // Replace S entirely, but keep the reference (so all closures still work)
+      Object.keys(S).forEach(function(k){ delete S[k]; });
+      Object.keys(loaded).forEach(function(k){ S[k] = loaded[k]; });
+      // Re-render the dashboard
+      if (typeof render === 'function') render();
+      alert('Imported "' + file.name + '" successfully.');
+    } catch (err) {
+      alert('Could not import JSON:\n\n' + err.message);
+    }
+    event.target.value = '';  // allow re-import of same file
+  };
+  reader.onerror = function() { alert('Failed to read file.'); event.target.value = ''; };
+  reader.readAsText(file);
+}
+
+// ============================================================
+// EXCEL EXPORT \u2014 two-sheet structure matching Payette template
+// ============================================================
+// Helpers for SheetJS (with xlsx-js-style for cell styling support)
+
+// Convert (row, col) [1-based] to A1 notation
+function _xa(row, col) {
+  var s = '';
+  while (col > 0) { var m = (col-1) % 26; s = String.fromCharCode(65+m) + s; col = Math.floor((col-1)/26); }
+  return s + row;
+}
+
+// Set a cell with optional value/formula/style. row/col are 1-based.
+function _xset(ws, row, col, opts) {
+  var addr = _xa(row, col);
+  var cell = { t: 's' };
+  if (opts.f !== undefined) { cell.f = opts.f; cell.t = 'n'; cell.v = 0; }
+  else if (opts.v !== undefined) {
+    cell.v = opts.v;
+    cell.t = (typeof opts.v === 'number') ? 'n' : 's';
+  } else {
+    cell.v = '';
+  }
+  if (opts.z) cell.z = opts.z;       // number format
+  if (opts.s) cell.s = opts.s;       // style
+  ws[addr] = cell;
+  return cell;
+}
+
+// Build a style object \u2014 caller passes plain attrs
+function _xstyle(o) {
+  var s = {};
+  if (o.font || o.bold || o.italic || o.size || o.color) {
+    s.font = { name: o.font || 'Arial', sz: o.size || 11 };
+    if (o.bold) s.font.bold = true;
+    if (o.italic) s.font.italic = true;
+    if (o.color) s.font.color = { rgb: o.color };
+  }
+  if (o.fill) s.fill = { patternType: 'solid', fgColor: { rgb: o.fill }, bgColor: { rgb: o.fill } };
+  if (o.border) {
+    s.border = {};
+    var b = o.border;
+    if (b.top)    s.border.top    = { style: b.top.style || b.top, color: { rgb: b.top.color || '000000' } };
+    if (b.bottom) s.border.bottom = { style: b.bottom.style || b.bottom, color: { rgb: b.bottom.color || '000000' } };
+    if (b.left)   s.border.left   = { style: b.left.style || b.left, color: { rgb: b.left.color || '000000' } };
+    if (b.right)  s.border.right  = { style: b.right.style || b.right, color: { rgb: b.right.color || '000000' } };
+  }
+  if (o.halign || o.valign || o.wrap || o.indent !== undefined) {
+    s.alignment = {};
+    if (o.halign) s.alignment.horizontal = o.halign;
+    if (o.valign) s.alignment.vertical = o.valign;
+    if (o.wrap) s.alignment.wrapText = true;
+    if (o.indent !== undefined) s.alignment.indent = o.indent;
+  }
+  return s;
+}
+
+// Constants \u2014 must match Python builder exactly
+var _GROUP_COLORS = {
+  learning:  '66C6C1',
+  corelabs:  'E086C0',
+  research:  'F28D79',
+  community: 'FFDF5A',
+  admin:     '98ACE5',
+  support:   'C2C3C8',
+};
+var _HAIR = 'AAAAAA';
+var _HAIR_B = { top:{style:'hair', color:_HAIR}, bottom:{style:'hair', color:_HAIR} };
+var _MED_TOP = { top:{style:'medium', color:'000000'} };
+var _THICK   = { top:{style:'thick', color:'000000'}, bottom:{style:'thick', color:'000000'} };
+var _NO_B    = {};
+
+// FICM legend (color, label) \u2014 same as Python
+var _FICM_LEGEND = [
+  ['98ACE5', 'OFFICE SUPPORT - WORKROOM, STORAGE'],
+  ['B6CDEF', 'OFFICE - ENCLOSED'],
+  ['C5E1FF', 'OFFICE - OPEN, COMPUTATIONAL, WRITE-UP (or as 4c below)'],
+  ['E6F7FF', 'OFFICE - CIRCULATION WITHIN SUITE'],
+  ['66C6C1', 'LEARNING SUPPORT - TEACHING LAB / CLASSROOM / ASSEMBLY / EVENT'],
+  ['9EDDD1', 'LEARNING - TEACHING LAB / SHOP / MAKER SPACE'],
+  ['CAEADF', 'LEARNING - CLASSROOM / AUDITORIUM / COMPUTER LAB'],
+  ['E9FFF7', 'LEARNING - CIRCULATION WITHIN SUITE'],
+  ['FEB522', 'VERTICAL CIRCULATION - ELEVATOR, STAIR'],
+  ['FFDF5A', 'MONUMENTAL STAIRS'],
+  ['FFFBEB', 'COMMUNITY - GENERAL CIRCULATION'],
+  ['FFE885', 'ENCLOSED - MEETING / COLLAB / STUDY / LOUNGE / EXHIBIT / KITCHENETTE'],
+  ['FFF4C7', 'OPEN COLLABORATION / COMMONS / LOUNGE / EXHIBIT / KITCHENETTE / CAF\u00c9'],
+  ['F28D79', 'RESEARCH - LAB SUPPORT'],
+  ['F2AA9C', 'RESEARCH - LAB OPEN & ENCLOSED'],
+  ['F9D9C7', 'RESEARCH - WRITE-UP / COMPUTATIONAL (or as 1c above)'],
+  ['FFEED4', 'RESEARCH - CIRCULATION WITHIN SUITE'],
+  ['E068B5', 'SPECIALTY - SUPPORT (CORE & ANIMAL)'],
+  ['E086C0', 'SPECIALTY - CORE LAB / ANIMAL HOLDING & PROCEDURE'],
+  ['EFB1D0', 'SPECIALTY - OFFICE (CORE & ANIMAL)'],
+  ['FCDEDE', 'SPECIALTY - CIRCULATION WITHIN SUITE'],
+  ['C2C3C8', 'SUPPORT - BUILDING SUPPORT / MEP / STORAGE / CAF\u00c9 SUPPORT'],
+  ['E7E7E7', 'SUPPORT - UNFINISHED AREA / SHELL'],
+];
+
+// Build a hybrid section structure from live S
+function _buildSections() {
+  var sections = [];
+  var researchFloors = Math.max(1, S.aboveGradeFloors - 1);
+
+  // 1. Learning \u2014 event/teaching items from gfProgram
+  var learningRows = S.gfProgram.filter(function(g){return g.on && g.cat==='event'})
+    .map(function(g){ return { desc:g.name, qty:1, size:g.nasf, remarks:'Ground-floor event space' }; });
+  sections.push({
+    title:'Learning', color:_GROUP_COLORS.learning,
+    remarks:'Ground-floor event & teaching spaces',
+    subgroups:[{ title:'Event & Teaching Commons', rows:learningRows }]
+  });
+
+  // 2. Research Lab + Office \u2014 one sub-group per PI typology
+  var researchSubs = [];
+  S.types.forEach(function(t) {
+    if (t.pis <= 0) return;
+    var rows = [];
+    if (t.openLabPerFTE > 0)    rows.push({ desc:'Open Lab',          people:t.fteCount, qty:t.pis, size:t.fteCount*t.openLabPerFTE,    remarks:t.openLabPerFTE+' sf/FTE \u00d7 '+t.fteCount+' FTE/group' });
+    if (t.labSupportPerFTE > 0) rows.push({ desc:'Lab Support',       people:t.fteCount, qty:t.pis, size:t.fteCount*t.labSupportPerFTE, remarks:t.labSupportPerFTE+' sf/FTE \u00d7 '+t.fteCount+' FTE/group' });
+    if (t.deskPerFTE > 0)       rows.push({ desc:'Researcher Desks',  people:t.fteCount, qty:t.pis, size:t.fteCount*t.deskPerFTE,       remarks:t.deskPerFTE+' sf/FTE \u00d7 '+t.fteCount+' FTE/group' });
+    rows.push({ desc:'Faculty Office', people:1, qty:t.pis, size:t.facultyOffice, remarks:'Private faculty office per PI' });
+    rows.push({ desc:'Flex Office',    people:1, qty:t.pis, size:t.flexOffice,    remarks:'Flex / hoteling office per PI' });
+    researchSubs.push({ title:t.label+'  ('+t.pis+' PIs \u00d7 '+t.fteCount+' FTE)', rows:rows });
+  });
+  sections.push({
+    title:'Research Lab + Office', color:_GROUP_COLORS.research,
+    remarks:'PI typologies \u2014 Open Lab + Lab Support + Desks + Offices',
+    subgroups:researchSubs
+  });
+
+  // 3. Core Labs
+  var coreRows = S.coreItems.filter(function(c){return c.on}).map(function(c){
+    return { desc:c.name, qty:1, size:c.nasf, remarks:'Shared / core facility' };
+  });
+  sections.push({
+    title:'Core Labs', color:_GROUP_COLORS.corelabs,
+    remarks:'Shared core facilities at building scale',
+    subgroups:[{ title:'Shared Core Facilities', rows:coreRows }]
+  });
+
+  // 4. Community Spaces
+  var gfCommRows = S.gfProgram.filter(function(g){return g.on && g.cat==='community'})
+    .map(function(g){ return { desc:g.name, qty:1, size:g.nasf, remarks:'Ground floor' }; });
+  var upperRows = S.upperCommunity.filter(function(u){return u.on}).map(function(u){
+    return { desc:u.name, qty:researchFloors, size:u.nasf, remarks:'Repeat per research floor (\u00d7'+researchFloors+')' };
+  });
+  sections.push({
+    title:'Community Spaces', color:_GROUP_COLORS.community,
+    remarks:'Target 12-15% of NASF',
+    subgroups:[
+      { title:'Ground Floor Community', rows:gfCommRows },
+      { title:'Upper Floor Community (per research floor)', rows:upperRows },
+    ]
+  });
+
+  // 5. Administrative Office (placeholder)
+  sections.push({
+    title:'Administrative Office', color:_GROUP_COLORS.admin,
+    remarks:'Non-research administrative offices',
+    subgroups:[{ title:'Administration', rows:[
+      { desc:'School / Department Administration', people:12, qty:1, size:2400, remarks:'Placeholder \u2014 confirm with NU during DD' }
+    ]}]
+  });
+
+  // 6. Program Support
+  var supportRows = S.gfProgram.filter(function(g){return g.on && g.cat==='support'})
+    .map(function(g){ return { desc:g.name, qty:1, size:g.nasf, remarks:'Ground floor support' }; });
+  sections.push({
+    title:'Program Support', color:_GROUP_COLORS.support,
+    remarks:'Loading, building ops, MEP support',
+    subgroups:[{ title:'Building Support', rows:supportRows }]
+  });
+
+  return sections;
+}
+
+// ============================================================
+// Build NEB Program sheet
+// ============================================================
+function _buildProgramSheet(wb) {
+  var ws = {};
+  var widths = { A:9.18, B:5.82, C:42.54, D:8.63, E:8.63, F:8.63, G:8.63, H:8.63, I:8.63, J:8.63, K:12.82, L:38.0 };
+  ws['!cols'] = ['A','B','C','D','E','F','G','H','I','J','K','L'].map(function(c){return {wch:widths[c]};});
+  ws['!rows'] = [];
+  ws['!merges'] = [];
+
+  function rowH(r, h) { ws['!rows'][r-1] = { hpt: h }; }
+
+  // Header rows 2-3
+  rowH(2, 22.0);
+  _xset(ws, 2, 2, { v:'NORTHWESTERN ENGINEERING BUILDING',
+    s:_xstyle({ font:'Arial Black', size:14, halign:'left', valign:'center' }) });
+  _xset(ws, 2, 12, { v:'PAYETTE',
+    s:_xstyle({ font:'Arial Black', size:14, halign:'right', valign:'center' }) });
+
+  rowH(3, 25.0);
+  _xset(ws, 3, 2, { v:'Program Summary',
+    s:_xstyle({ font:'Arial', size:20, bold:true, halign:'left', valign:'center' }) });
+  _xset(ws, 3, 12, { v:'Date',
+    s:_xstyle({ font:'Arial', size:11, halign:'right', valign:'center' }) });
+
+  rowH(4, 5.25);
+  rowH(5, 15.0);
+  rowH(6, 14.5);
+  rowH(7, 5.25);
+
+  _xset(ws, 5, 2, { v:'Program Group', s:_xstyle({ size:11, halign:'left', valign:'center' }) });
+  _xset(ws, 5, 4, { v:'Program Detail', s:_xstyle({ size:11, halign:'center', valign:'center' }) });
+  ws['!merges'].push({ s:{r:4,c:3}, e:{r:4,c:10} });
+  _xset(ws, 5, 12, { v:'Remarks', s:_xstyle({ size:10 }) });
+
+  var hdrs6 = [['C','Space Description','left'],['D','People','center'],['E','Seats','center'],
+               ['F','Qty','center'],['G','Size Ea.','center'],['H','Area','center'],
+               ['I','Hood LF','center'],['J','Hoods','center'],['K','Total','center']];
+  hdrs6.forEach(function(h){
+    var col = h[0].charCodeAt(0)-64;
+    _xset(ws, 6, col, { v:h[1], s:_xstyle({ size:11, halign:h[2], valign:'center' }) });
+  });
+
+  // Sections
+  var sections = _buildSections();
+  var cur = 8;
+  var groupRows = [];  // [{r:rowNum, title:...}]
+
+  sections.forEach(function(sec, secIdx) {
+    var nDetail = sec.subgroups.reduce(function(a,sg){return a+sg.rows.length;},0);
+    var nSub = sec.subgroups.length;
+    var grpR = cur;
+    var spacer = cur+1;
+    var firstData = cur+2;
+    var lastData = cur+1+nSub+nDetail;
+
+    // Group header band
+    rowH(grpR, 19.0);
+    var grpBd = secIdx > 0 ? _MED_TOP : _NO_B;
+    var grpStyle = _xstyle({ font:'Arial', size:14, bold:true, fill:sec.color, border:grpBd, halign:'left', valign:'center', indent:1 });
+    _xset(ws, grpR, 2, { v:sec.title, s:grpStyle });
+    for (var c=3; c<=9; c++) {
+      _xset(ws, grpR, c, { s:_xstyle({ size:11, fill:sec.color, border:grpBd, halign:'center', valign:'center' }) });
+    }
+    // J = % of NASF (formula patched after NASF row known)
+    _xset(ws, grpR, 10, {
+      f:'K'+grpR+'/$K$%NASF%', z:'0%',
+      s:_xstyle({ size:10, bold:true, fill:sec.color, border:grpBd, halign:'center', valign:'center' })
+    });
+    // K = group total
+    _xset(ws, grpR, 11, {
+      f:'SUM(H'+firstData+':H'+lastData+')', z:'#,##0',
+      s:_xstyle({ size:14, bold:true, border:grpBd, halign:'right', valign:'center', indent:1 })
+    });
+    if (sec.remarks) {
+      _xset(ws, grpR, 12, { v:sec.remarks,
+        s:_xstyle({ size:10, italic:true, color:'666666', halign:'left', valign:'center' }) });
+    }
+    groupRows.push({ r:grpR, title:sec.title });
+
+    // Spacer under band
+    rowH(spacer, 6.0);
+
+    // Sub-groups + details
+    var sgR = spacer + 1;
+    sec.subgroups.forEach(function(sg) {
+      rowH(sgR, 14.5);
+      var sgFirst = sgR+1;
+      var sgLast  = sgR+sg.rows.length;
+      _xset(ws, sgR, 3, { v:sg.title, s:_xstyle({ size:11, bold:true, border:_HAIR_B, halign:'left', valign:'center' }) });
+      _xset(ws, sgR, 11, { f:'SUM(H'+sgFirst+':H'+sgLast+')', z:'#,##0',
+        s:_xstyle({ size:11, bold:true, border:_HAIR_B, halign:'right', valign:'center', indent:1 }) });
+
+      sg.rows.forEach(function(rd, ri) {
+        var r = sgR+1+ri;
+        rowH(r, 14.5);
+        _writeDetailRow(ws, r, rd);
+      });
+
+      sgR = sgLast + 1;
+    });
+
+    // Spacer after section
+    cur = sgR;
+    rowH(cur, 5.25);
+    cur += 1;
+  });
+
+  // NASF Total
+  var nasfR = cur;
+  rowH(nasfR, 18.5);
+  for (var c=2; c<=10; c++) {
+    _xset(ws, nasfR, c, { s:_xstyle({ size:14, bold:true, border:_THICK, halign:'center', valign:'center' }) });
+  }
+  _xset(ws, nasfR, 2, { v:'Total Net Assignable Square Feet (NASF)',
+    s:_xstyle({ size:14, bold:true, border:_THICK, halign:'left', valign:'center', indent:1 }) });
+  _xset(ws, nasfR, 8, { v:'net:gross', s:_xstyle({ size:10, border:_THICK, halign:'right', valign:'center' }) });
+  // Compute net:gross from S (or use 0.55 default)
+  var totalGSF = S.basementGSF + (S.aboveGradeFloors * S.aboveGradeGSF) + S.penthouseGSF;
+  var ng = totalGSF > 0 ? Math.round((/* totalNASF */ 1)*0)/100 : 0.55;  // placeholder; actual value below
+  _xset(ws, nasfR, 9, { v:0.55, z:'0.00',
+    s:_xstyle({ size:11, bold:true, border:_THICK, halign:'right', valign:'center', indent:1 }) });
+  // K = sum of group K's
+  var nasfFormula = groupRows.map(function(g){return 'K'+g.r;}).join('+');
+  _xset(ws, nasfR, 11, { f:nasfFormula, z:'#,##0',
+    s:_xstyle({ size:14, bold:true, border:_THICK, halign:'right', valign:'center', indent:1 }) });
+
+  // Patch group J formulas now that NASF row is known
+  groupRows.forEach(function(g) {
+    var addr = _xa(g.r, 10);
+    if (ws[addr] && ws[addr].f) ws[addr].f = ws[addr].f.replace('%NASF%', nasfR);
+  });
+
+  cur = nasfR + 1;
+  rowH(cur, 5.25); cur += 1;
+
+  // Occupant rows
+  var totalOcc = S.types.reduce(function(a,t){return a+t.pis*(1+t.fteCount);},0);
+  var totalOff = S.types.reduce(function(a,t){return a+t.pis*2;},0);
+  var totalDsk = S.types.reduce(function(a,t){return a+t.pis*t.fteCount;},0);
+  var occRows = [
+    ['Occupants', 4, totalOcc, 'PIs + FTEs across all typologies'],
+    ['Offices',   6, totalOff, 'Faculty + Flex offices (per PI typology)'],
+    ['Researcher Desks', 6, totalDsk, 'FTEs (write-up / desk space)'],
+  ];
+  occRows.forEach(function(o) {
+    rowH(cur, 14.5);
+    _xset(ws, cur, 3,  { v:o[0], s:_xstyle({ size:11, halign:'left', valign:'center' }) });
+    _xset(ws, cur, o[1], { v:o[2], z:'#,##0', s:_xstyle({ size:11, bold:true, halign:'right', valign:'center', indent:1 }) });
+    _xset(ws, cur, 12, { v:o[3], s:_xstyle({ size:10, italic:true, color:'666666', halign:'left', valign:'center' }) });
+    cur += 1;
+  });
+  rowH(cur, 5.25); cur += 1;
+
+  // GSF Total + breakdown
+  var gsfR = cur;
+  rowH(gsfR, 19.0);
+  for (var c=2; c<=10; c++) {
+    _xset(ws, gsfR, c, { s:_xstyle({ size:14, bold:true, border:_THICK, halign:'center', valign:'center' }) });
+  }
+  _xset(ws, gsfR, 2, { v:'Total Gross Square Feet (GSF)',
+    s:_xstyle({ size:14, bold:true, border:_THICK, halign:'left', valign:'center', indent:1 }) });
+  _xset(ws, gsfR, 11, { v:totalGSF, z:'#,##0',
+    s:_xstyle({ size:14, bold:true, border:_THICK, halign:'right', valign:'center', indent:1 }) });
+  cur += 1;
+
+  var gsfBreakdown = [
+    ['Basement', S.basementGSF],
+    ['Above-Grade Floors (\u00d7'+S.aboveGradeFloors+')', S.aboveGradeFloors * S.aboveGradeGSF],
+    ['Penthouse / Mechanical', S.penthouseGSF],
+  ];
+  gsfBreakdown.forEach(function(g) {
+    rowH(cur, 14.5);
+    _xset(ws, cur, 3,  { v:g[0], s:_xstyle({ size:11, border:_HAIR_B, halign:'left', valign:'center' }) });
+    _xset(ws, cur, 10, { f:'K'+cur+'/K$'+gsfR, z:'0.00%',
+      s:_xstyle({ size:10, border:_HAIR_B, halign:'center', valign:'center' }) });
+    _xset(ws, cur, 11, { v:g[1], z:'#,##0',
+      s:_xstyle({ size:11, border:_HAIR_B, halign:'right', valign:'center', indent:1 }) });
+    cur += 1;
+  });
+
+  var lastDataRow = cur - 1;
+
+  // FICM legend, 10 blank rows below last data row
+  var legendStart = lastDataRow + 11;
+  _FICM_LEGEND.forEach(function(item, i) {
+    var r = legendStart + i;
+    rowH(r, 22.0);
+    _xset(ws, r, 2, { s:_xstyle({ fill:item[0] }) });
+    _xset(ws, r, 3, { s:_xstyle({ fill:item[0] }) });
+    _xset(ws, r, 4, { v:item[1],
+      s:_xstyle({ size:10, bold:true, color:'333333', halign:'left', valign:'center', indent:1 }) });
+  });
+
+  // Set range
+  var lastRow = legendStart + _FICM_LEGEND.length - 1;
+  ws['!ref'] = 'A1:L' + lastRow;
+
+  // Page setup
+  ws['!pageSetup'] = { fitToWidth:1, fitToHeight:0, orientation:'portrait' };
+  ws['!margins'] = { left:0.4, right:0.4, top:0.5, bottom:0.5 };
+
+  XLSX.utils.book_append_sheet(wb, ws, 'NEB Program');
+  return { nasfRow: nasfR, gsfRow: gsfR, totalGSF: totalGSF };
+}
+
+// Write a detail row (cols C-L). rd = { desc, people, seats, qty, size, remarks }
+function _writeDetailRow(ws, r, rd) {
+  var bd = _HAIR_B;
+  var body = function(extra) {
+    return _xstyle(Object.assign({ size:11, border:bd, valign:'center' }, extra||{}));
+  };
+  _xset(ws, r, 3, { v:rd.desc || '', s:body({ halign:'left', indent:1 }) });
+  if (rd.people !== undefined && rd.people !== null) _xset(ws, r, 4, { v:rd.people, z:'#,##0', s:body({ halign:'right', indent:1 }) });
+  else _xset(ws, r, 4, { s:body({ halign:'center' }) });
+  if (rd.seats  !== undefined && rd.seats  !== null) _xset(ws, r, 5, { v:rd.seats, s:body({ halign:'center' }) });
+  else _xset(ws, r, 5, { s:body({ halign:'center' }) });
+  if (rd.qty    !== undefined && rd.qty    !== null) _xset(ws, r, 6, { v:rd.qty, z:'#,##0', s:body({ halign:'right', indent:1 }) });
+  else _xset(ws, r, 6, { s:body({ halign:'center' }) });
+  if (rd.size   !== undefined && rd.size   !== null) _xset(ws, r, 7, { v:rd.size, z:'#,##0', s:body({ halign:'right', indent:1 }) });
+  else _xset(ws, r, 7, { s:body({ halign:'center' }) });
+  // H = G * F
+  _xset(ws, r, 8, { f:'G'+r+'*F'+r, z:'#,##0', s:body({ halign:'right', indent:1 }) });
+  _xset(ws, r, 9, { s:body({ halign:'center' }) });
+  _xset(ws, r, 10, { s:body({ halign:'center' }) });
+  _xset(ws, r, 11, { s:body({ halign:'right', indent:1 }) });
+  _xset(ws, r, 12, { v:rd.remarks || '', s:_xstyle({ size:10, border:bd, halign:'left', valign:'center' }) });
+}
+
+// ============================================================
+// Build Cost Estimator Summary sheet
+// ============================================================
+function _buildCostSheet(wb, ctx) {
+  var ws = {};
+  var widths = { A:9.18, B:5.82, C:42.54, D:10.5, E:9.0, F:10.5, G:10.5, H:9.0, I:7.0, J:9.0, K:20.0, L:38.0 };
+  ws['!cols'] = ['A','B','C','D','E','F','G','H','I','J','K','L'].map(function(c){return {wch:widths[c]};});
+  ws['!rows'] = [];
+  ws['!merges'] = [];
+  function rowH(r, h) { ws['!rows'][r-1] = { hpt:h }; }
+
+  // Header rows 2-3
+  rowH(2, 22.0);
+  _xset(ws, 2, 2,  { v:'NORTHWESTERN ENGINEERING BUILDING', s:_xstyle({ font:'Arial Black', size:14, halign:'left', valign:'center' }) });
+  _xset(ws, 2, 12, { v:'PAYETTE', s:_xstyle({ font:'Arial Black', size:14, halign:'right', valign:'center' }) });
+  rowH(3, 25.0);
+  _xset(ws, 3, 2,  { v:'Cost Estimator Summary', s:_xstyle({ size:20, bold:true, halign:'left', valign:'center' }) });
+  _xset(ws, 3, 12, { v:'Date', s:_xstyle({ size:11, halign:'right', valign:'center' }) });
+  rowH(4, 5.25);
+  rowH(5, 15.0); rowH(6, 28); rowH(7, 5.25);
+
+  _xset(ws, 5, 2, { v:'Cost Group', s:_xstyle({ size:11, halign:'left', valign:'center' }) });
+  _xset(ws, 5, 4, { v:'Line Item Detail', s:_xstyle({ size:11, halign:'center', valign:'center' }) });
+  ws['!merges'].push({ s:{r:4,c:3}, e:{r:4,c:10} });
+  _xset(ws, 5, 12, { v:'Remarks', s:_xstyle({ size:10 }) });
+
+  var hdrs6 = [['C','Description'],['D','NASF'],['E','DGSF\nFactor'],['F','GFA'],['G','GSF'],
+               ['H','$/SF'],['I','Qty'],['J','%'],['K','Subtotal']];
+  hdrs6.forEach(function(h){
+    var col = h[0].charCodeAt(0)-64;
+    _xset(ws, 6, col, { v:h[1], s:_xstyle({ size:11, halign:'center', valign:'center', wrap:true }) });
+  });
+
+  var BLD_C  = _GROUP_COLORS.support;
+  var PROG_C = _GROUP_COLORS.research;
+  var BW_C   = _GROUP_COLORS.corelabs;
+  var ESC_C  = _GROUP_COLORS.community;
+  var TOT_C  = _GROUP_COLORS.learning;
+  var RATE_FILL  = 'FFF4C7';
+  var INPUT_FILL = 'E9FFF7';
+
+  function band(row, color, label, mark) {
+    rowH(row, 19.0);
+    var bd = mark ? _MED_TOP : _NO_B;
+    for (var c=2; c<=12; c++) {
+      _xset(ws, row, c, { s:_xstyle({ size:14, bold:true, fill:color, border:bd, halign:'center', valign:'center' }) });
+    }
+    _xset(ws, row, 2, { v:label, s:_xstyle({ size:14, bold:true, fill:color, border:bd, halign:'left', valign:'center', indent:1 }) });
+  }
+  function subgroup(row, label, kFormula) {
+    rowH(row, 14.5);
+    _xset(ws, row, 3, { v:label, s:_xstyle({ size:11, bold:true, border:_HAIR_B, halign:'left', valign:'center' }) });
+    // Always create K cell — may be patched later with the actual sum formula
+    _xset(ws, row, 11, { f:kFormula || 'SUM(K'+row+':K'+row+')', z:'"$"#,##0',
+      s:_xstyle({ size:11, bold:true, border:_HAIR_B, halign:'right', valign:'center', indent:1 }) });
+  }
+  // Detail row writer for cost sheet
+  function detail(row, o) {
+    rowH(row, 14.5);
+    var bd = _HAIR_B;
+    var body = function(extra){ return _xstyle(Object.assign({ size:11, border:bd, valign:'center' }, extra||{})); };
+    _xset(ws, row, 3, { v:o.desc||'', s:body({ halign:'left', indent:1 }) });
+    if (o.nasf !== undefined) _xset(ws, row, 4, (typeof o.nasf==='string' && o.nasf.charAt(0)==='=' ? { f:o.nasf.substr(1) } : { v:o.nasf }));
+    var c4 = ws[_xa(row,4)]; if (c4) { c4.z='#,##0'; c4.s=body({ halign:'right', indent:1, fill:o.editableNASF?INPUT_FILL:undefined }); }
+    if (o.factor !== undefined) _xset(ws, row, 5, (typeof o.factor==='string' && o.factor.charAt(0)==='=' ? { f:o.factor.substr(1) } : { v:o.factor }));
+    var c5 = ws[_xa(row,5)]; if (c5) { c5.z='0.000'; c5.s=body({ halign:'right', indent:1 }); }
+    if (o.gfa !== undefined) _xset(ws, row, 6, (typeof o.gfa==='string' && o.gfa.charAt(0)==='=' ? { f:o.gfa.substr(1) } : { v:o.gfa }));
+    var c6 = ws[_xa(row,6)]; if (c6) { c6.z='#,##0'; c6.s=body({ halign:'right', indent:1 }); }
+    if (o.gsf !== undefined) _xset(ws, row, 7, (typeof o.gsf==='string' && o.gsf.charAt(0)==='=' ? { f:o.gsf.substr(1) } : { v:o.gsf }));
+    var c7 = ws[_xa(row,7)]; if (c7) { c7.z='#,##0'; c7.s=body({ halign:'right', indent:1, fill:o.editableInput?INPUT_FILL:undefined }); }
+    if (o.rate !== undefined) _xset(ws, row, 8, { v:o.rate });
+    var c8 = ws[_xa(row,8)]; if (c8) { c8.z='"$"#,##0'; c8.s=body({ halign:'right', indent:1, fill:o.rate!==undefined?RATE_FILL:undefined }); }
+    if (o.qty !== undefined) _xset(ws, row, 9, { v:o.qty });
+    var c9 = ws[_xa(row,9)]; if (c9) { c9.z='#,##0'; c9.s=body({ halign:'right', indent:1 }); }
+    if (o.pct !== undefined) _xset(ws, row, 10, (typeof o.pct==='string' && o.pct.charAt(0)==='=' ? { f:o.pct.substr(1) } : { v:o.pct }));
+    var c10 = ws[_xa(row,10)]; if (c10) { c10.z='0.00%'; c10.s=body({ halign:'right', indent:1, fill:(o.pct!==undefined && typeof o.pct!=='string')?RATE_FILL:undefined }); }
+    if (o.subtotal !== undefined) _xset(ws, row, 11, (typeof o.subtotal==='string' && o.subtotal.charAt(0)==='=' ? { f:o.subtotal.substr(1) } : { v:o.subtotal }));
+    var c11 = ws[_xa(row,11)]; if (c11) { c11.z='"$"#,##0'; c11.s=body({ halign:'right', indent:1 }); }
+    _xset(ws, row, 12, { v:o.remarks||'', s:_xstyle({ size:10, border:bd, halign:'left', valign:'center' }) });
+  }
+
+  var nasfRow = ctx.nasfRow;
+  var totalGSF = ctx.totalGSF;
+
+  // 1. Building Inputs band
+  var r = 8;
+  band(r, BLD_C, 'Building Inputs', false); r += 1; rowH(r, 6.0); r += 1;
+  var inputsFirst = r;
+  detail(r, { desc:'Total GSF', gsf:totalGSF, remarks:'Editable \u2014 basement + above-grade \u00d7 N + penthouse', editableInput:true }); r += 1;
+  detail(r, { desc:'Total NASF (linked from NEB Program)', nasf:"='NEB Program'!K"+nasfRow, remarks:'Live link \u2014 updates from program tab' }); r += 1;
+  detail(r, { desc:'Departmental Gross % (DGSF / GSF)', pct:S.deptGrossPct, remarks:'Editable \u2014 share of GSF assigned to departmental gross' }); r += 1;
+  detail(r, { desc:'Departmental Gross SF (DGSF)', gsf:'=ROUND(G'+inputsFirst+'*J'+(inputsFirst+2)+',0)', remarks:'Total GSF \u00d7 DGSF %' }); r += 1;
+  detail(r, { desc:'NASF \u2192 DGSF inflation factor', factor:'=G'+(inputsFirst+3)+'/D'+(inputsFirst+1), remarks:'DGSF / NASF' }); r += 1;
+
+  var GSF_CELL = 'G'+inputsFirst;
+  var DGSF_FACTOR_CELL = 'E'+(inputsFirst+4);
+  rowH(r, 5.25); r += 1;
+
+  // 2. Program Fitout band
+  band(r, PROG_C, 'Program Fitout \u2014 NASF \u2192 GFA \u2192 Cost', true);
+  var bandProgRow = r; r += 1; rowH(r, 6.0); r += 1;
+
+  // PI Typologies sub-group
+  var sgPiRow = r; subgroup(sgPiRow, 'PI Typologies'); var piFirst = r+1; r += 1;
+  S.types.forEach(function(t) {
+    if (t.pis <= 0) return;
+    var groupNasf = t.pis * (t.fteCount * (t.openLabPerFTE + t.labSupportPerFTE + t.deskPerFTE) + t.facultyOffice + t.flexOffice);
+    var rate = (S.cost.typeRates && S.cost.typeRates[t.id]) || 538;
+    detail(r, {
+      desc: t.label + '  (' + t.pis + ' PIs)',
+      nasf: groupNasf,
+      factor: '=$'+DGSF_FACTOR_CELL,
+      gfa: '=ROUND(D'+r+'*E'+r+',0)',
+      rate: rate,
+      subtotal: '=F'+r+'*H'+r,
+      remarks: t.fteCount+' FTE/group; '+(t.infra||'').substr(0,50),
+      editableNASF: true,
+    });
+    r += 1;
+  });
+  var piLast = r-1;
+  ws[_xa(sgPiRow,11)].f = 'SUM(K'+piFirst+':K'+piLast+')';
+
+  // Core Facilities sub-group
+  var sgCoreRow = r; subgroup(sgCoreRow, 'Core Facilities'); var coreFirst = r+1; r += 1;
+  S.coreItems.forEach(function(c) {
+    if (!c.on) return;
+    var rate = (S.cost.coreRates && S.cost.coreRates[c.name]) || 538;
+    detail(r, {
+      desc: c.name, nasf: c.nasf,
+      factor: '=$'+DGSF_FACTOR_CELL,
+      gfa: '=ROUND(D'+r+'*E'+r+',0)',
+      rate: rate,
+      subtotal: '=F'+r+'*H'+r,
+      remarks: 'Shared / core facility',
+      editableNASF: true,
+    });
+    r += 1;
+  });
+  var coreLast = r-1;
+  ws[_xa(sgCoreRow,11)].f = 'SUM(K'+coreFirst+':K'+coreLast+')';
+
+  // Non-Research sub-group
+  var gfComm = S.gfProgram.filter(function(g){return g.on && g.cat==='community'}).reduce(function(s,g){return s+g.nasf;},0);
+  var researchFloors = Math.max(1, S.aboveGradeFloors - 1);
+  var upperComm = S.upperCommunity.filter(function(u){return u.on}).reduce(function(s,u){return s+u.nasf;},0) * researchFloors;
+  var totalComm = gfComm + upperComm;
+  var gfEvent = S.gfProgram.filter(function(g){return g.on && g.cat==='event'}).reduce(function(s,g){return s+g.nasf;},0);
+  var gfSupport = S.gfProgram.filter(function(g){return g.on && g.cat==='support'}).reduce(function(s,g){return s+g.nasf;},0);
+
+  var sgOtherRow = r; subgroup(sgOtherRow, 'Non-Research Program'); var otherFirst = r+1; r += 1;
+  [['Community Spaces', totalComm, S.cost.communityRate, 'GF + upper-floor community'],
+   ['Event Spaces',     gfEvent,    S.cost.eventRate,    'Colloquium / Eng Learn'],
+   ['Program Support',  gfSupport,  S.cost.supportRate,  'Loading + building support']].forEach(function(o) {
+    detail(r, {
+      desc:o[0], nasf:o[1],
+      factor:'=$'+DGSF_FACTOR_CELL,
+      gfa:'=ROUND(D'+r+'*E'+r+',0)',
+      rate:o[2],
+      subtotal:'=F'+r+'*H'+r,
+      remarks:o[3], editableNASF:true,
+    });
+    r += 1;
+  });
+  var otherLast = r-1;
+  ws[_xa(sgOtherRow,11)].f = 'SUM(K'+otherFirst+':K'+otherLast+')';
+
+  // Set Program Fitout band K = sum of 3 sub-group totals
+  var bandK = ws[_xa(bandProgRow,11)];
+  if (bandK) { bandK.f = 'K'+sgPiRow+'+K'+sgCoreRow+'+K'+sgOtherRow; bandK.z='"$"#,##0'; }
+  else _xset(ws, bandProgRow, 11, { f:'K'+sgPiRow+'+K'+sgCoreRow+'+K'+sgOtherRow, z:'"$"#,##0',
+    s:_xstyle({ size:14, bold:true, fill:PROG_C, border:_MED_TOP, halign:'right', valign:'center', indent:1 }) });
+
+  rowH(r, 5.25); r += 1;
+
+  // 3. Building-Wide Costs band
+  band(r, BW_C, 'Building-Wide Costs  (\u00d7 Total GSF)', true);
+  var bandBwRow = r; r += 1; rowH(r, 6.0); r += 1;
+  var bwFirst = r;
+  detail(r, { desc:'Core & Shell (structure, enclosure, base MEP)',
+    gsf:'=$'+GSF_CELL, rate:S.cost.coreShellRate, subtotal:'=G'+r+'*H'+r,
+    remarks:'Vermeulens base rate \u00d7 total GSF' }); r += 1;
+  detail(r, { desc:'Site & Demo',
+    gsf:'=$'+GSF_CELL, rate:S.cost.siteRate, subtotal:'=G'+r+'*H'+r,
+    remarks:'Site work, demolition allowance' }); r += 1;
+  var bwLast = r-1;
+  var bwBandK = ws[_xa(bandBwRow,11)];
+  if (bwBandK) { bwBandK.f = 'SUM(K'+bwFirst+':K'+bwLast+')'; bwBandK.z='"$"#,##0'; }
+
+  // Base Construction subtotal row
+  rowH(r, 18.5);
+  for (var c=4; c<=10; c++) {
+    _xset(ws, r, c, { s:_xstyle({ size:12, bold:true, border:_MED_TOP, valign:'center' }) });
+  }
+  _xset(ws, r, 3, { v:'Base Construction (Q4 2025)',
+    s:_xstyle({ size:12, bold:true, border:_MED_TOP, halign:'left', valign:'center', indent:1 }) });
+  _xset(ws, r, 11, { f:'K'+bandProgRow+'+K'+bandBwRow, z:'"$"#,##0',
+    s:_xstyle({ size:12, bold:true, border:_MED_TOP, halign:'right', valign:'center', indent:1 }) });
+  var baseConstRow = r; r += 2;
+
+  // 4. Escalation, Tariff & Soft Costs band
+  band(r, ESC_C, 'Escalation, Tariff & Soft Costs', true); r += 1; rowH(r, 6.0); r += 1;
+  // Escalation
+  var yearsToMid = (S.cost.escalationYear - S.cost.baseYear) + (S.cost.escalationQuarter - S.cost.baseQuarter)/4;
+  detail(r, {
+    desc:'Escalation ('+(S.cost.escalationRate*100).toFixed(1)+'% \u00d7 '+yearsToMid.toFixed(2)+' yr)',
+    pct:'=(1+'+S.cost.escalationRate+')^'+yearsToMid+'-1',
+    subtotal:'=ROUND(K'+baseConstRow+'*J'+r+',0)',
+    remarks:'Compound annual escalation to mid-construction'
+  });
+  var escRow = r; r += 1;
+  detail(r, { desc:'Escalated Construction', subtotal:'=K'+baseConstRow+'+K'+escRow, remarks:'Base + escalation' });
+  var escTotalRow = r; r += 1;
+  detail(r, { desc:'Tariff Premium', pct:S.cost.tariffPct, subtotal:'=ROUND(K'+escTotalRow+'*J'+r+',0)', remarks:'Material tariff allowance' });
+  var tariffRow = r; r += 1;
+  detail(r, { desc:'Construction Cost (post-tariff)', subtotal:'=K'+escTotalRow+'+K'+tariffRow, remarks:'Sum of escalated + tariff' });
+  var postTariffRow = r; r += 1;
+  detail(r, { desc:'Soft Costs Multiplier (design, contingency, FF&E)', remarks:'Multiplier applied to post-tariff construction' });
+  // Override J col with multiplier (not a percent)
+  _xset(ws, r, 10, { v:S.cost.softMultiplier, z:'0.00',
+    s:_xstyle({ size:11, fill:RATE_FILL, border:_HAIR_B, halign:'right', valign:'center', indent:1 }) });
+  var softRow = r; r += 2;
+
+  // 5. Total Project Cost band
+  band(r, TOT_C, 'Total Project Cost', true);
+  rowH(r, 22.0);
+  _xset(ws, r, 11, { f:'ROUND(K'+postTariffRow+'*J'+softRow+',0)', z:'"$"#,##0',
+    s:_xstyle({ font:'Arial Black', size:14, fill:TOT_C, border:_MED_TOP, halign:'right', valign:'center', indent:1 }) });
+  var grandRow = r; r += 1;
+  rowH(r, 14.5);
+  _xset(ws, r, 3,  { v:'Project Cost / GSF', s:_xstyle({ size:11, border:_HAIR_B, halign:'left', valign:'center', indent:1 }) });
+  _xset(ws, r, 11, { f:'ROUND(K'+grandRow+'/'+GSF_CELL+',0)', z:'"$"#,##0',
+    s:_xstyle({ size:12, bold:true, border:_HAIR_B, halign:'right', valign:'center', indent:1 }) });
+  r += 2;
+
+  // Footer
+  rowH(r, 14);
+  _xset(ws, r, 2, { v:'Yellow cells = $/SF rates and percentages (editable).  Teal cells = structural inputs (editable).  All other figures recompute automatically.',
+    s:_xstyle({ size:8, italic:true, color:'888780', halign:'left', valign:'center', indent:1 }) });
+  ws['!merges'].push({ s:{r:r-1,c:1}, e:{r:r-1,c:11} }); r += 1;
+  rowH(r, 14);
+  _xset(ws, r, 2, { v:'Base rates: Vermeulens Q4 2025, Evanston IL, CMAR delivery.  NASF on each line is editable.',
+    s:_xstyle({ size:8, italic:true, color:'888780', halign:'left', valign:'center', indent:1 }) });
+  ws['!merges'].push({ s:{r:r-1,c:1}, e:{r:r-1,c:11} });
+
+  ws['!ref'] = 'A1:L' + r;
+  ws['!pageSetup'] = { fitToWidth:1, fitToHeight:0, orientation:'portrait' };
+  ws['!margins'] = { left:0.4, right:0.4, top:0.5, bottom:0.5 };
+
+  XLSX.utils.book_append_sheet(wb, ws, 'Cost Estimator Summary');
+}
+
 function exportXLSX() {
+  if (typeof XLSX === 'undefined') { alert('Excel library not loaded yet \u2014 please reload the page and try again.'); return; }
+  var wb = XLSX.utils.book_new();
+  var ctx = _buildProgramSheet(wb);
+  _buildCostSheet(wb, ctx);
+  XLSX.writeFile(wb, 'Northwestern_NEB_Program_Export_' + new Date().toISOString().slice(0,10) + '.xlsx');
+}
+
+// Stub remaining old code (Summary/PI/Core/Community/Neighborhood/Energy/Cost sheets)
+// \u2014 replaced by the two-sheet structure above. Keep variables named for the
+// original code's variable scope until the closing brace.
+function _legacyExportXLSXStub() {
   var d = C();
   var wb = XLSX.utils.book_new();
   var dt = new Date().toLocaleString();
-
-  // --- Sheet 1: Dashboard Summary ---
-  var sum = [
-    ['NEB Programming Dashboard \u2014 Summary'],
-    ['Generated', dt],
-    [],
-    ['BUILDING ENVELOPE'],
-    ['Metric', 'Value'],
-    ['Total GSF', d.totalGSF],
-    ['Total NASF', d.totalNASF],
-    ['Overall Efficiency', Math.round(d.overallEff * 100) + '%'],
-    ['Basement GSF', S.basementGSF],
-    ['Above-Grade Floor Plate (GSF)', S.aboveGradeGSF],
-    ['Above-Grade Floors', S.aboveGradeFloors],
-    ['Penthouse GSF', S.penthouseGSF],
-    ['Research Floors', d.researchFloors],
-    ['Research Floor NASF', d.researchFloorNASF],
-    ['Ground Floor NASF', d.gfNASF],
-    ['Basement NASF', d.basementNASF],
-    [],
-    ['PROGRAM SUMMARY'],
-    ['Metric', 'Value'],
-    ['Total PIs', d.totalPIs],
-    ['Total FTEs', Math.round(d.totalFTEs)],
-    ['PI / Research NASF', d.piNASF],
-    ['Core Facilities NASF', d.coreNASF],
-    ['Core Target (' + Math.round(S.corePct * 100) + '% of PI NASF)', d.coreTarget],
-    ['Community NASF (Actual)', d.communityNASFActual],
-    ['Event NASF', d.eventNASF],
-    ['Total Demand', d.totalDemand],
-    ['Surplus / Deficit', d.surplus],
-    [],
-    ['ENERGY'],
-    ['Metric', 'Value'],
-    ['Building EUI (kBTU/SF)', Math.round(d.buildingEUI)],
-    ['Total Energy (kBTU)', Math.round(d.totalKBTU)],
-    [],
-    ['COST'],
-    ['Metric', 'Value'],
-    ['Base Construction', Math.round(d.cost.constructionCost)],
-    ['Escalated Construction', Math.round(d.cost.escalatedConstruction)],
-    ['Total Project Cost', Math.round(d.cost.projectCost)],
-    ['Project Cost / GSF', Math.round(d.cost.costPerGSF)],
-  ];
+  var sum = [];
   var ws1 = XLSX.utils.aoa_to_sheet(sum);
   ws1['!cols'] = [{wch:36},{wch:18}];
   XLSX.utils.book_append_sheet(wb, ws1, 'Summary');
@@ -3276,6 +3940,403 @@ function exportXLSX() {
 
   // --- Download ---
   XLSX.writeFile(wb, 'NEB_Dashboard_' + new Date().toISOString().slice(0,10) + '.xlsx');
+}
+
+// ============================================================
+// TAB 11: VISUALIZATIONS (D3.js)
+// ============================================================
+function renderVisualizations(d) {
+  var h = '<div class="card"><div class="card-title">D3 Visualizations</div>';
+  h += '<div class="card-sub">Interactive data visualizations powered by D3.js. These charts provide alternative ways to explore the building program.</div></div>';
+  // Sankey
+  h += '<div class="card"><div class="card-title">Space Flow \u2014 Sankey Diagram</div>';
+  h += '<div class="card-sub">How gross floor area flows through efficiency loss into net assignable area, then distributes across program categories.</div>';
+  h += '<div id="d3Sankey" style="width:100%;min-height:420px"></div></div>';
+  // Treemap
+  h += '<div class="card"><div class="card-title">Program Area \u2014 Treemap</div>';
+  h += '<div class="card-sub">Proportional area of every space type, grouped by category. Hover for details.</div>';
+  h += '<div id="d3Treemap" style="width:100%;min-height:480px"></div></div>';
+  // Waterfall
+  h += '<div class="card"><div class="card-title">Cost Buildup \u2014 Waterfall Chart</div>';
+  h += '<div class="card-sub">How project cost accumulates from Core &amp; Shell through fitout, site, escalation, tariff, and soft costs.</div>';
+  h += '<div id="d3Waterfall" style="width:100%;min-height:400px"></div></div>';
+  // Radar
+  h += '<div class="card"><div class="card-title">Scenario Comparison \u2014 Radar Chart</div>';
+  h += '<div class="card-sub">All scenarios overlaid on key performance axes. Each axis is normalized to the maximum across scenarios.</div>';
+  h += '<div id="d3Radar" style="width:100%;min-height:500px;display:flex;justify-content:center"></div></div>';
+  return h;
+}
+
+function mountD3Visuals(d) {
+  setTimeout(function() {
+    mountSankey(d);
+    mountTreemap(d);
+    mountWaterfall(d);
+    mountRadar();
+  }, 30);
+}
+
+// ── SANKEY ──────────────────────────────────────────────────
+function mountSankey(d) {
+  var container = document.getElementById('d3Sankey');
+  if (!container) return;
+  var W = container.clientWidth || 800, H = 400;
+  var svg = d3.select('#d3Sankey').append('svg').attr('width', W).attr('height', H);
+
+  // Nodes: GSF → zones → program categories
+  var nodes = [
+    { name: 'Total GSF' },           // 0
+    { name: 'Non-Assignable' },       // 1
+    { name: 'Basement NASF' },        // 2
+    { name: 'Ground Floor NASF' },    // 3
+    { name: 'Upper Floors NASF' },    // 4
+    { name: 'Research Labs' },        // 5
+    { name: 'Faculty Office' },       // 6
+    { name: 'Core Facilities' },      // 7
+    { name: 'Community' },            // 8
+    { name: 'Event' },                // 9
+    { name: 'Building Support' },     // 10
+    { name: 'Unassigned' },           // 11
+    { name: 'Penthouse (MEP)' },      // 12
+  ];
+
+  var researchFloors = d.researchFloors;
+  var researchFloorNASF = d.researchFloorNASF;
+  var bsmtNASF = d.basementNASF;
+  var gfNASF = d.gfNASF;
+  var upperNASF = researchFloors * researchFloorNASF;
+  var totalNASF = d.totalNASF;
+  var totalGSF = d.totalGSF;
+  var nonAssignable = totalGSF - totalNASF - S.penthouseGSF;
+
+  var cs = S.coreFloorSplit;
+  var bsmtCore = Math.round(d.coreNASF * cs.basement);
+  var gfCore = Math.round(d.coreNASF * cs.ground);
+  var resCore = d.coreNASF - bsmtCore - gfCore;
+  var bsmtRes = d.basementResearchNASF;
+  var bsmtSupport = Math.max(0, bsmtNASF - bsmtCore - bsmtRes);
+  var gfComm = d.gfCommunity;
+  var gfEvent = d.eventNASF;
+  var gfSupp = d.gfSupport;
+  var gfRemain = Math.max(0, gfNASF - d.gfUsed - gfCore);
+  var labTotal = d.bldgOpenLab + d.bldgLabSupport + d.bldgDesk;
+  var offTotal = d.bldgOffice;
+  var upperComm = d.upperCommunityTotal;
+  var upperUnassigned = Math.max(0, upperNASF - labTotal - offTotal - resCore - upperComm);
+  var surplus = Math.max(0, d.surplus);
+
+  var links = [
+    { source:0, target:1,  value: Math.max(1, nonAssignable) },
+    { source:0, target:12, value: Math.max(1, S.penthouseGSF) },
+    { source:0, target:2,  value: Math.max(1, bsmtNASF) },
+    { source:0, target:3,  value: Math.max(1, gfNASF) },
+    { source:0, target:4,  value: Math.max(1, upperNASF) },
+  ];
+  // Basement → categories
+  if (bsmtRes > 0) links.push({ source:2, target:5, value:bsmtRes });
+  if (bsmtCore > 0) links.push({ source:2, target:7, value:bsmtCore });
+  if (bsmtSupport > 0) links.push({ source:2, target:10, value:bsmtSupport });
+  // Ground floor → categories
+  if (gfCore > 0) links.push({ source:3, target:7, value:gfCore });
+  if (gfComm > 0) links.push({ source:3, target:8, value:gfComm });
+  if (gfEvent > 0) links.push({ source:3, target:9, value:gfEvent });
+  if (gfSupp > 0) links.push({ source:3, target:10, value:gfSupp });
+  if (gfRemain > 0) links.push({ source:3, target:11, value:gfRemain });
+  // Upper floors → categories
+  if (labTotal > 0) links.push({ source:4, target:5, value:labTotal });
+  if (offTotal > 0) links.push({ source:4, target:6, value:offTotal });
+  if (resCore > 0) links.push({ source:4, target:7, value:resCore });
+  if (upperComm > 0) links.push({ source:4, target:8, value:upperComm });
+  if (upperUnassigned > 0) links.push({ source:4, target:11, value:upperUnassigned });
+
+  var sankeyGen = d3.sankey()
+    .nodeId(function(n,i){return i})
+    .nodeWidth(18).nodePadding(14)
+    .nodeAlign(d3.sankeyLeft)
+    .extent([[1,8],[W-1,H-8]]);
+
+  var graph = sankeyGen({ nodes: nodes.map(function(n,i){return {name:n.name}}), links: links.map(function(l){return {source:l.source,target:l.target,value:l.value}}) });
+
+  var colorMap = { 'Total GSF':'#1B3A5C', 'Non-Assignable':'#C2C3C8', 'Penthouse (MEP)':'#C2C3C8',
+    'Basement NASF':'#98ACE5', 'Ground Floor NASF':'#B6CDEF', 'Upper Floors NASF':'#66C6C1',
+    'Research Labs':'#F2AA9C', 'Faculty Office':'#FEB522', 'Core Facilities':'#E086C0',
+    'Community':'#FFE885', 'Event':'#66C6C1', 'Building Support':'#C2C3C8', 'Unassigned':'#E7E7E7' };
+
+  svg.append('g').selectAll('rect').data(graph.nodes).enter().append('rect')
+    .attr('x',function(n){return n.x0}).attr('y',function(n){return n.y0})
+    .attr('height',function(n){return Math.max(1,n.y1-n.y0)}).attr('width',function(n){return n.x1-n.x0})
+    .attr('fill',function(n){return colorMap[n.name]||'#999'}).attr('rx',2)
+    .append('title').text(function(n){return n.name+': '+F(Math.round(n.value))+' SF'});
+
+  svg.append('g').attr('fill','none').selectAll('path').data(graph.links).enter().append('path')
+    .attr('d',d3.sankeyLinkHorizontal())
+    .attr('stroke',function(l){return colorMap[l.source.name]||'#ccc'})
+    .attr('stroke-width',function(l){return Math.max(1,l.width)})
+    .attr('stroke-opacity',0.35)
+    .append('title').text(function(l){return l.source.name+' \u2192 '+l.target.name+': '+F(Math.round(l.value))+' SF'});
+
+  svg.append('g').style('font-family','Sora,sans-serif').style('font-size','11px').style('font-weight','600')
+    .selectAll('text').data(graph.nodes).enter().append('text')
+    .attr('x',function(n){return n.x0<W/2?n.x1+6:n.x0-6})
+    .attr('y',function(n){return (n.y0+n.y1)/2})
+    .attr('dy','0.35em')
+    .attr('text-anchor',function(n){return n.x0<W/2?'start':'end'})
+    .text(function(n){return n.name+' ('+F(Math.round(n.value))+')'})
+    .attr('fill','#404040');
+}
+
+// ── TREEMAP ─────────────────────────────────────────────────
+function mountTreemap(d) {
+  var container = document.getElementById('d3Treemap');
+  if (!container) return;
+  var W = container.clientWidth || 800, H = 460;
+
+  var merged = mergeLargeLabBreakdown(d.typeBreakdown);
+  var children = [];
+  // Research types
+  var resKids = merged.map(function(t){
+    return { name:t.label, value:t.totalNASF, color:t.color, group:'Research' };
+  });
+  if (resKids.length > 0) children.push({ name:'Research Labs', children:resKids });
+  // Core
+  var coreKids = [];
+  S.coreItems.forEach(function(c){ if(c.on) coreKids.push({ name:c.name.split('/')[0].trim(), value:c.nasf, color:'var(--clrCore)', group:'Core' }); });
+  if (coreKids.length > 0) children.push({ name:'Core Facilities', children:coreKids });
+  // Community
+  var commKids = [];
+  S.gfProgram.forEach(function(g){ if(g.on && g.cat==='community') commKids.push({ name:g.name, value:g.nasf, color:'var(--clrCommunity)', group:'Community' }); });
+  S.upperCommunity.forEach(function(u){ if(u.on) commKids.push({ name:u.name+' (\u00d7'+d.researchFloors+')', value:u.nasf*d.researchFloors, color:'var(--clrCommunity)', group:'Community' }); });
+  if (commKids.length > 0) children.push({ name:'Community', children:commKids });
+  // Event
+  var eventKids = [];
+  S.gfProgram.forEach(function(g){ if(g.on && g.cat==='event') eventKids.push({ name:g.name, value:g.nasf, color:'var(--clrEvent)', group:'Event' }); });
+  if (eventKids.length > 0) children.push({ name:'Event', children:eventKids });
+  // Support
+  var suppKids = [];
+  S.gfProgram.forEach(function(g){ if(g.on && g.cat==='support') suppKids.push({ name:g.name, value:g.nasf, color:'var(--clrSupport)', group:'Support' }); });
+  if (suppKids.length > 0) children.push({ name:'Building Support', children:suppKids });
+
+  var root = d3.hierarchy({ name:'Building Program', children:children }).sum(function(n){return n.value||0}).sort(function(a,b){return b.value-a.value});
+  d3.treemap().size([W,H]).padding(3).paddingTop(22).round(true)(root);
+
+  var groupColors = { 'Research Labs':'#F2AA9C', 'Core Facilities':'#E086C0', 'Community':'#FFE885', 'Event':'#66C6C1', 'Building Support':'#C2C3C8' };
+
+  var svg = d3.select('#d3Treemap').append('svg').attr('width',W).attr('height',H);
+
+  // Group rectangles
+  svg.selectAll('.grp').data(root.children).enter().append('rect')
+    .attr('x',function(n){return n.x0}).attr('y',function(n){return n.y0})
+    .attr('width',function(n){return n.x1-n.x0}).attr('height',function(n){return n.y1-n.y0})
+    .attr('fill','none').attr('stroke',function(n){return groupColors[n.data.name]||'#ccc'})
+    .attr('stroke-width',2).attr('rx',6);
+
+  // Group labels
+  svg.selectAll('.grpLabel').data(root.children).enter().append('text')
+    .attr('x',function(n){return n.x0+6}).attr('y',function(n){return n.y0+15})
+    .style('font-family','Sora,sans-serif').style('font-size','11px').style('font-weight','700')
+    .attr('fill','#404040').text(function(n){return n.data.name+' ('+F(n.value)+' NASF)'});
+
+  // Leaf cells
+  var leaves = svg.selectAll('.leaf').data(root.leaves()).enter().append('g');
+  leaves.append('rect')
+    .attr('x',function(n){return n.x0}).attr('y',function(n){return n.y0})
+    .attr('width',function(n){return n.x1-n.x0}).attr('height',function(n){return n.y1-n.y0})
+    .attr('fill',function(n){return groupColors[n.parent.data.name]||'#ddd'})
+    .attr('fill-opacity',0.6).attr('rx',3).attr('stroke','#fff').attr('stroke-width',1)
+    .style('cursor','pointer')
+    .on('mouseover',function(){d3.select(this).attr('fill-opacity',0.9)})
+    .on('mouseout',function(){d3.select(this).attr('fill-opacity',0.6)})
+    .append('title').text(function(n){return n.data.name+': '+F(n.value)+' NASF'});
+
+  leaves.append('text')
+    .attr('x',function(n){return n.x0+4}).attr('y',function(n){return n.y0+14})
+    .style('font-family','IBM Plex Mono,monospace').style('font-size','10px').style('font-weight','600')
+    .attr('fill','#333')
+    .text(function(n){ var w=n.x1-n.x0; return w>60?n.data.name:''; })
+    .each(function(n){ var w=n.x1-n.x0-8; if(this.getComputedTextLength()>w) { var txt=n.data.name; while(txt.length>3&&this.getComputedTextLength()>w){txt=txt.slice(0,-1);this.textContent=txt+'\u2026';} } });
+
+  leaves.append('text')
+    .attr('x',function(n){return n.x0+4}).attr('y',function(n){return n.y0+26})
+    .style('font-family','IBM Plex Mono,monospace').style('font-size','9px').style('font-weight','400')
+    .attr('fill','#666')
+    .text(function(n){ return (n.x1-n.x0)>60 && (n.y1-n.y0)>32 ? F(n.value)+' SF':''; });
+}
+
+// ── WATERFALL ───────────────────────────────────────────────
+function mountWaterfall(d) {
+  var container = document.getElementById('d3Waterfall');
+  if (!container) return;
+  var cc = d.cost;
+  var W = container.clientWidth || 800, H = 380;
+  var margin = {top:30,right:30,bottom:80,left:90};
+  var iW = W-margin.left-margin.right, iH = H-margin.top-margin.bottom;
+
+  var steps = [
+    { label:'Core & Shell', value:cc.totalCoreShell, type:'add' },
+    { label:'Program Fitout', value:cc.totalFitout, type:'add' },
+    { label:'Site & Demo', value:cc.totalSite, type:'add' },
+    { label:'Construction', value:cc.totalCoreShell+cc.totalFitout+cc.totalSite, type:'total' },
+    { label:'Escalation', value:cc.escalationCost, type:'add' },
+    { label:'Tariff ('+Math.round(S.cost.tariffPct*100)+'%)', value:cc.tariffCost, type:'add' },
+    { label:'Escalated + Tariff', value:cc.postTariff, type:'total' },
+    { label:'Soft Costs (\u00d7'+S.cost.softMultiplier+')', value:cc.projectCost - cc.postTariff, type:'add' },
+    { label:'Project Total', value:cc.projectCost, type:'total' },
+  ];
+
+  // Calculate running totals for waterfall positioning
+  var running = 0;
+  steps.forEach(function(s){
+    if (s.type === 'total') { s.start = 0; s.end = s.value; running = s.value; }
+    else { s.start = running; s.end = running + s.value; running = s.end; }
+  });
+
+  var maxVal = d3.max(steps, function(s){return s.end});
+  var x = d3.scaleBand().domain(steps.map(function(s){return s.label})).range([0,iW]).padding(0.25);
+  var y = d3.scaleLinear().domain([0, maxVal*1.08]).range([iH,0]);
+
+  var svg = d3.select('#d3Waterfall').append('svg').attr('width',W).attr('height',H)
+    .append('g').attr('transform','translate('+margin.left+','+margin.top+')');
+
+  // Grid lines
+  svg.append('g').attr('class','grid').selectAll('line')
+    .data(y.ticks(6)).enter().append('line')
+    .attr('x1',0).attr('x2',iW).attr('y1',function(t){return y(t)}).attr('y2',function(t){return y(t)})
+    .attr('stroke','#eee').attr('stroke-width',1);
+
+  // Bars
+  svg.selectAll('.bar').data(steps).enter().append('rect')
+    .attr('x',function(s){return x(s.label)})
+    .attr('y',function(s){return y(Math.max(s.start,s.end))})
+    .attr('width',x.bandwidth())
+    .attr('height',function(s){return Math.abs(y(s.start)-y(s.end))})
+    .attr('fill',function(s){return s.type==='total'?'#1B3A5C':'#66C6C1'})
+    .attr('rx',3)
+    .append('title').text(function(s){return s.label+': $'+F(Math.round(s.value))});
+
+  // Connector lines between bars
+  steps.forEach(function(s,i){
+    if (i < steps.length-1 && s.type !== 'total') {
+      svg.append('line')
+        .attr('x1',x(s.label)+x.bandwidth()).attr('x2',x(steps[i+1].label))
+        .attr('y1',y(s.end)).attr('y2',y(s.end))
+        .attr('stroke','#aaa').attr('stroke-dasharray','3,2').attr('stroke-width',1);
+    }
+  });
+
+  // Value labels
+  svg.selectAll('.valLabel').data(steps).enter().append('text')
+    .attr('x',function(s){return x(s.label)+x.bandwidth()/2})
+    .attr('y',function(s){return y(s.end)-6})
+    .attr('text-anchor','middle')
+    .style('font-family','IBM Plex Mono,monospace').style('font-size','10px').style('font-weight','600')
+    .attr('fill',function(s){return s.type==='total'?'#1B3A5C':'#404040'})
+    .text(function(s){return '$'+FMM(s.value)});
+
+  // X axis
+  svg.append('g').attr('transform','translate(0,'+iH+')').call(d3.axisBottom(x).tickSize(0))
+    .selectAll('text').attr('transform','rotate(-35)').style('text-anchor','end')
+    .style('font-family','Sora,sans-serif').style('font-size','10px');
+
+  // Y axis
+  svg.append('g').call(d3.axisLeft(y).ticks(6).tickFormat(function(v){return '$'+FMM(v)}))
+    .selectAll('text').style('font-family','IBM Plex Mono,monospace').style('font-size','10px');
+}
+
+// ── RADAR ───────────────────────────────────────────────────
+function mountRadar() {
+  var container = document.getElementById('d3Radar');
+  if (!container || S.scenarios.length === 0) {
+    if (container) container.innerHTML = '<div style="text-align:center;color:var(--mut);padding:40px">Save scenarios to see the radar comparison.</div>';
+    return;
+  }
+
+  var R = 200, cx = 280, cy = 240;
+  var W = 560, H = 480;
+  var axes = [
+    { key:'pis', label:'Total PIs' },
+    { key:'util', label:'Utilization %' },
+    { key:'core', label:'Core NASF' },
+    { key:'eui', label:'EUI (kBTU/SF)' },
+    { key:'costGSF', label:'Cost / GSF' },
+    { key:'comm', label:'Community NASF' },
+  ];
+  var n = axes.length;
+  var angleSlice = 2 * Math.PI / n;
+
+  // Extract data per scenario
+  var scData = S.scenarios.map(function(sc){
+    return {
+      name: sc.name,
+      pis: sc.data.totalPIs,
+      util: sc.data.totalNASF > 0 ? sc.data.totalDemand / sc.data.totalNASF * 100 : 0,
+      core: sc.data.coreNASF,
+      eui: sc.data.buildingEUI,
+      costGSF: sc.data.cost.costPerGSF || 0,
+      comm: sc.data.communityNASFActual,
+    };
+  });
+
+  // Find max per axis for normalization
+  var maxes = {};
+  axes.forEach(function(a){
+    maxes[a.key] = d3.max(scData, function(s){return s[a.key]}) || 1;
+  });
+
+  var svg = d3.select('#d3Radar').append('svg').attr('width',W).attr('height',H);
+  var g = svg.append('g').attr('transform','translate('+cx+','+cy+')');
+
+  // Grid circles
+  [0.2,0.4,0.6,0.8,1.0].forEach(function(level){
+    var pts = axes.map(function(a,i){
+      var angle = angleSlice*i - Math.PI/2;
+      return [R*level*Math.cos(angle), R*level*Math.sin(angle)];
+    });
+    g.append('polygon')
+      .attr('points',pts.map(function(p){return p[0]+','+p[1]}).join(' '))
+      .attr('fill','none').attr('stroke','#ddd').attr('stroke-width',1);
+  });
+
+  // Axis lines and labels
+  axes.forEach(function(a,i){
+    var angle = angleSlice*i - Math.PI/2;
+    var x2 = R*Math.cos(angle), y2 = R*Math.sin(angle);
+    g.append('line').attr('x1',0).attr('y1',0).attr('x2',x2).attr('y2',y2)
+      .attr('stroke','#ccc').attr('stroke-width',1);
+    var lx = (R+25)*Math.cos(angle), ly = (R+25)*Math.sin(angle);
+    g.append('text').attr('x',lx).attr('y',ly).attr('text-anchor','middle').attr('dy','0.35em')
+      .style('font-family','Sora,sans-serif').style('font-size','11px').style('font-weight','600')
+      .attr('fill','#404040').text(a.label);
+  });
+
+  // Scenario polygons
+  var scColors = ['#1B3A5C','#66C6C1','#F2AA9C','#E086C0','#FEB522'];
+  scData.forEach(function(sc,si){
+    var pts = axes.map(function(a,i){
+      var val = sc[a.key] / maxes[a.key];
+      var angle = angleSlice*i - Math.PI/2;
+      return [R*val*Math.cos(angle), R*val*Math.sin(angle)];
+    });
+    g.append('polygon')
+      .attr('points',pts.map(function(p){return p[0]+','+p[1]}).join(' '))
+      .attr('fill',scColors[si%scColors.length]).attr('fill-opacity',0.08)
+      .attr('stroke',scColors[si%scColors.length]).attr('stroke-width',2).attr('stroke-opacity',0.8);
+    // Dots
+    pts.forEach(function(p,i){
+      g.append('circle').attr('cx',p[0]).attr('cy',p[1]).attr('r',3.5)
+        .attr('fill',scColors[si%scColors.length])
+        .append('title').text(sc.name+' \u2014 '+axes[i].label+': '+(axes[i].key==='util'?sc[axes[i].key].toFixed(1)+'%':axes[i].key==='costGSF'?'$'+F(Math.round(sc[axes[i].key])):F(Math.round(sc[axes[i].key]))));
+    });
+  });
+
+  // Legend
+  var legend = svg.append('g').attr('transform','translate('+10+','+(H-scData.length*20-10)+')');
+  scData.forEach(function(sc,i){
+    legend.append('rect').attr('x',0).attr('y',i*20).attr('width',14).attr('height',14).attr('rx',3)
+      .attr('fill',scColors[i%scColors.length]);
+    legend.append('text').attr('x',20).attr('y',i*20+11)
+      .style('font-family','Sora,sans-serif').style('font-size','11px').style('font-weight','500')
+      .attr('fill','#404040').text(sc.name);
+  });
 }
 
 // ============================================================
