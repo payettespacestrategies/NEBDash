@@ -225,14 +225,15 @@ var S = {
     { name:'Loading',                     nasf:2000, on:true, cat:'support' },
     { name:'Bldg Support (Storage, IT, Ops)', nasf:2000, on:true, cat:'support' },
   ],
-  // Each item has a `floor` assignment:
-  //   'all' = item repeats on every research floor (legacy behavior)
-  //   '<n>' (string number, e.g. '2','3','4') = item lives only on that floor
+  // Each item has a `floor` assignment and a `cat` category:
+  //   floor: 'all' = repeats on every research floor; 'N' = only Floor N.
+  //   cat:   'community' counts toward Community NASF (collab/social space);
+  //          'event' counts toward Event NASF (rooms used for talks, classes).
   upperCommunity: [
-    { name:'Living Room / Lounge', nasf:600, on:true, floor:'all' },
-    { name:'Meeting Rooms (2\u20133)', nasf:2000, on:true, floor:'all' },
-    { name:'Tea Station / Kitchenette + Seating', nasf:500, on:true, floor:'all' },
-    { name:'Whiteboard Nooks / Phone Rooms', nasf:500, on:true, floor:'all' },
+    { name:'Living Room / Lounge', nasf:600, on:true, floor:'all', cat:'community' },
+    { name:'Meeting Rooms (2\u20133)', nasf:2000, on:true, floor:'all', cat:'community' },
+    { name:'Tea Station / Kitchenette + Seating', nasf:500, on:true, floor:'all', cat:'community' },
+    { name:'Whiteboard Nooks / Phone Rooms', nasf:500, on:true, floor:'all', cat:'community' },
   ],
 
   // Tab 7 - Scenarios
@@ -537,38 +538,56 @@ function C() {
 
   var gfUsed = 0;
   S.gfProgram.forEach(function(g) { if (g.on) gfUsed += g.nasf; });
-  var eventNASF = S.gfProgram.filter(function(g){return g.on && g.cat==='event'}).reduce(function(s,g){return s+g.nasf},0);
+  // Note: eventNASF is the GF-only event total here. After we compute upper-
+  // floor event items below, eventNASF is folded together with upperEventTotal.
+  var gfEventNASF = S.gfProgram.filter(function(g){return g.on && g.cat==='event'}).reduce(function(s,g){return s+g.nasf},0);
   var gfCommunity = S.gfProgram.filter(function(g){return g.on && g.cat==='community'}).reduce(function(s,g){return s+g.nasf},0);
   var gfSupport = S.gfProgram.filter(function(g){return g.on && g.cat==='support'}).reduce(function(s,g){return s+g.nasf},0);
 
-  // Upper floor community
-  //   'all'-floor items repeat on each research floor → multiplied below.
-  //   Floor-specific items (floor:'2','3',…) count once on that floor only.
-  // upperCommunityPerFloor is the per-floor "all" total (used for legacy display).
-  // upperCommunityByFloor is keyed by floor number string and contains the
-  // ALL-floor total + that floor's specific items, so renderStacking can ask
-  // "how much community sits on floor N?" directly.
-  var upperCommunityPerFloor = 0;
+  // Upper floor program (community + event items)
+  //   floor:'all' items repeat on each research floor → multiplied below.
+  //   floor:'N'   items count once on that floor only.
+  //   cat:'community' contributes to Community totals; cat:'event' contributes
+  //   to Event totals (so a colloquium space placed on Floor 3 lands in the
+  //   Event NASF metric and renders in the Event color on the floor stack).
+  // upperCommunityByFloor[N] / upperEventByFloor[N] hold the all-floor total
+  // PLUS that floor's specific items, so renderStacking can index by floor.
+  var upperCommunityPerFloor = 0;   // cat='community', floor='all'
+  var upperEventPerFloor = 0;       // cat='event',     floor='all'
   var upperCommunitySpecificTotal = 0;
-  var upperCommunityByFloor = {}; // { '2': nasf, '3': nasf, ... }
+  var upperEventSpecificTotal = 0;
+  var upperCommunityByFloor = {};   // { '2': nasf, '3': nasf, ... }  community only
+  var upperEventByFloor = {};       // event only
   S.upperCommunity.forEach(function(u) {
     if (!u.on) return;
     var fl = u.floor || 'all';
+    var cat = u.cat || 'community';
     if (fl === 'all') {
-      upperCommunityPerFloor += u.nasf;
+      if (cat === 'event') upperEventPerFloor += u.nasf;
+      else                 upperCommunityPerFloor += u.nasf;
     } else {
-      upperCommunitySpecificTotal += u.nasf;
-      upperCommunityByFloor[fl] = (upperCommunityByFloor[fl] || 0) + u.nasf;
+      if (cat === 'event') {
+        upperEventSpecificTotal += u.nasf;
+        upperEventByFloor[fl] = (upperEventByFloor[fl] || 0) + u.nasf;
+      } else {
+        upperCommunitySpecificTotal += u.nasf;
+        upperCommunityByFloor[fl] = (upperCommunityByFloor[fl] || 0) + u.nasf;
+      }
     }
   });
-  // Add the all-floor total to every research floor's bucket so callers can
-  // index by floor and get the complete per-floor community NASF.
+  // Layer the all-floor totals into every research floor bucket so callers
+  // can index by floor and get the complete per-floor NASF for each category.
   for (var rf = 2; rf <= S.aboveGradeFloors; rf++) {
     var key = String(rf);
     upperCommunityByFloor[key] = (upperCommunityByFloor[key] || 0) + upperCommunityPerFloor;
+    upperEventByFloor[key]     = (upperEventByFloor[key]     || 0) + upperEventPerFloor;
   }
   var upperCommunityTotal = upperCommunityPerFloor * researchFloors + upperCommunitySpecificTotal;
+  var upperEventTotal     = upperEventPerFloor     * researchFloors + upperEventSpecificTotal;
   var communityNASFActual = gfCommunity + upperCommunityTotal;
+  // Roll the upper-floor event items into the building-wide eventNASF so
+  // metrics, scenario comparison, and energy/cost calcs see the full total.
+  var eventNASF = gfEventNASF + upperEventTotal;
   var totalDemand = researchNASF + communityNASFActual + eventNASF + gfSupport;
   var surplus = totalNASF - totalDemand;
 
@@ -689,10 +708,15 @@ function C() {
     eventNASF:eventNASF, piNASF:piNASF, totalPIs:totalPIs, totalFTEs:totalFTEs,
     typeBreakdown:typeBreakdown, coreNASF:coreNASF, coreTarget:coreTarget,
     researchNASF:researchNASF, gfUsed:gfUsed, gfCommunity:gfCommunity,
-    gfSupport:gfSupport, upperCommunityTotal:upperCommunityTotal,
+    gfSupport:gfSupport, gfEventNASF:gfEventNASF,
+    upperCommunityTotal:upperCommunityTotal,
     upperCommunityPerFloor:upperCommunityPerFloor,
     upperCommunityByFloor:upperCommunityByFloor,
     upperCommunitySpecificTotal:upperCommunitySpecificTotal,
+    upperEventTotal:upperEventTotal,
+    upperEventPerFloor:upperEventPerFloor,
+    upperEventByFloor:upperEventByFloor,
+    upperEventSpecificTotal:upperEventSpecificTotal,
     totalDemand:totalDemand, surplus:surplus,
     bldgOpenLab:bldgOpenLab, bldgLabSupport:bldgLabSupport, bldgDesk:bldgDesk, bldgOffice:bldgOffice,
     energyBreakdown:energyBreakdown, totalKBTU:totalKBTU, buildingEUI:buildingEUI,
@@ -1344,17 +1368,20 @@ function renderCommunity(d) {
   h += '<div style="margin-top:8px"><button class="btn btn-navy btn-sm" onclick="addGF()">+ Add GF Item</button></div>';
   h += '</div>';
 
-  // RIGHT: Upper Floor Community (with optional per-floor assignment)
-  h += '<div class="card"><div class="card-title" style="color:var(--clrCommunity)">Upper Floor Community</div>';
-  h += '<div class="card-sub">Assign each item to a specific research floor, or leave on <em>All floors</em> to repeat on every floor.</div>';
-  // Build floor options once: 'all' + Floor 2..N
-  var floorOpts = '<option value="all">All floors</option>';
-  for (var fNum = 2; fNum <= S.aboveGradeFloors; fNum++) {
-    floorOpts += '<option value="'+fNum+'">Floor '+fNum+'</option>';
-  }
+  // RIGHT: Upper Floor Program (community + event with per-floor assignment)
+  h += '<div class="card"><div class="card-title" style="color:var(--clrCommunity)">Upper Floor Program <span style="font-size:.85rem;font-weight:400;color:var(--mut)">(community / event)</span></div>';
+  h += '<div class="card-sub">Pick a category (community or event) and a floor for each item. Items on <em>All floors</em> repeat on every research floor; items on a specific floor count once on that floor only. Event items roll into the building-wide Event NASF and color on the floor stack.</div>';
   S.upperCommunity.forEach(function(u, i) {
-    var bg = u.on ? 'var(--clrCommunity)' : '#ddd';
+    var cat = u.cat || 'community';
+    var catColor = cat === 'event' ? 'var(--clrEvent)' : 'var(--clrCommunity)';
+    var bg = u.on ? catColor : '#ddd';
     var fl = u.floor || 'all';
+    // Build category select (community / event), matching the GF program control
+    var catSel = '<select onchange="setUCCat('+i+',this.value)" style="font-size:.72rem;width:88px" title="Category \u2014 community or event (event rolls into Event NASF)">';
+    ['community','event'].forEach(function(c){
+      catSel += '<option value="'+c+'"'+(cat===c?' selected':'')+'>'+c+'</option>';
+    });
+    catSel += '</select>';
     // Build floor select with this item's value selected
     var sel = '<select onchange="setUCFloor('+i+',this.value)" style="font-size:.72rem;width:96px" title="Assign to a specific upper floor or leave on All floors">';
     sel += '<option value="all"'+(fl==='all'?' selected':'')+'>All floors</option>';
@@ -1367,33 +1394,40 @@ function renderCommunity(d) {
     if (u.on) h += '<span style="color:#fff;font-size:.6rem;font-weight:900">\u2713</span>';
     h += '</div>';
     h += '<input type="text" value="'+u.name.replace(/"/g,'&quot;')+'" style="flex:1;border:1px solid transparent;border-radius:4px;padding:3px 5px;font-size:.88rem;font-weight:'+(u.on?'600':'400')+';color:'+(u.on?'var(--navy)':'var(--mut)')+';font-family:inherit;background:transparent" onfocus="this.style.borderColor=\'var(--blue)\'" onblur="this.style.borderColor=\'transparent\'" onchange="renameUC('+i+',this.value)">';
+    h += catSel;
     h += sel;
     h += '<input type="number" value="'+u.nasf+'" min="0" max="5000" step="50" style="width:70px;font-size:.85rem" onchange="setUCNASF('+i+',this.value)">';
     h += '<span style="font-size:.68rem;color:var(--mut)">NASF</span>';
     h += '<button class="btn btn-out btn-sm" style="color:var(--coral);border-color:var(--coral);flex-shrink:0" onclick="deleteUC('+i+')">\u2715</button>';
     h += '</div>';
   });
-  // Summary: separate the all-floor and per-floor totals
-  h += '<div style="display:flex;justify-content:space-between;padding:8px 0;border-top:2px solid var(--bdr);margin-top:6px"><span style="font-size:.92rem;font-weight:600;color:var(--navy)">All-Floor Items (per floor)</span><span style="font-family:\'IBM Plex Mono\',monospace;font-size:1rem;font-weight:700;color:var(--navy)">'+F(d.upperCommunityPerFloor)+' NASF</span></div>';
-  h += '<div style="font-size:.78rem;color:var(--mut);margin-top:0">\u00d7 '+d.researchFloors+' research floors = '+F(d.upperCommunityPerFloor * d.researchFloors)+' NASF</div>';
-  // Per-floor specific items
+  // Summary: split community vs event, separate all-floor vs floor-specific contributions
+  // Community summary
+  h += '<div style="display:flex;justify-content:space-between;padding:8px 0;border-top:2px solid var(--bdr);margin-top:6px"><span style="font-size:.92rem;font-weight:600;color:var(--navy)"><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:var(--clrCommunity);margin-right:6px;vertical-align:middle"></span>Community \u2014 all-floor (per floor)</span><span style="font-family:\'IBM Plex Mono\',monospace;font-size:1rem;font-weight:700;color:var(--navy)">'+F(d.upperCommunityPerFloor)+' NASF</span></div>';
   if (d.upperCommunitySpecificTotal > 0) {
-    h += '<div style="margin-top:6px;padding-top:6px;border-top:1px dashed var(--bdr);font-size:.85rem;color:var(--navy);font-weight:600">Floor-Specific Items</div>';
-    var anyFloor = false;
     for (var fNum = 2; fNum <= S.aboveGradeFloors; fNum++) {
       var key = String(fNum);
-      // Count only the floor-specific contribution (subtract the all-floor pour-in)
       var specificOnFloor = (d.upperCommunityByFloor[key]||0) - d.upperCommunityPerFloor;
       if (specificOnFloor > 0) {
-        anyFloor = true;
-        h += '<div style="display:flex;justify-content:space-between;font-size:.85rem;padding:3px 0"><span style="color:var(--mut)">Floor '+fNum+'</span><span style="font-family:\'IBM Plex Mono\',monospace;font-weight:700;color:var(--navy)">+'+F(specificOnFloor)+' NASF</span></div>';
+        h += '<div style="display:flex;justify-content:space-between;font-size:.82rem;padding:2px 0;color:var(--mut)"><span>&nbsp;&nbsp;Floor '+fNum+' specific</span><span style="font-family:\'IBM Plex Mono\',monospace;font-weight:700;color:var(--navy)">+'+F(specificOnFloor)+' NASF</span></div>';
       }
     }
-    if (!anyFloor) {
-      h += '<div style="font-size:.78rem;color:var(--mut)">(none)</div>';
+  }
+  h += '<div style="display:flex;justify-content:space-between;font-size:.85rem;padding:3px 0;border-top:1px dashed var(--bdr)"><span style="color:var(--mut)">Total Upper Community</span><span style="font-family:\'IBM Plex Mono\',monospace;font-weight:700;color:var(--navy)">'+F(d.upperCommunityTotal)+' NASF</span></div>';
+  // Event summary
+  h += '<div style="display:flex;justify-content:space-between;padding:8px 0;border-top:2px solid var(--bdr);margin-top:6px"><span style="font-size:.92rem;font-weight:600;color:var(--navy)"><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:var(--clrEvent);margin-right:6px;vertical-align:middle"></span>Event \u2014 all-floor (per floor)</span><span style="font-family:\'IBM Plex Mono\',monospace;font-size:1rem;font-weight:700;color:var(--navy)">'+F(d.upperEventPerFloor)+' NASF</span></div>';
+  if (d.upperEventSpecificTotal > 0) {
+    for (var fNum2 = 2; fNum2 <= S.aboveGradeFloors; fNum2++) {
+      var key2 = String(fNum2);
+      var specificEv = (d.upperEventByFloor[key2]||0) - d.upperEventPerFloor;
+      if (specificEv > 0) {
+        h += '<div style="display:flex;justify-content:space-between;font-size:.82rem;padding:2px 0;color:var(--mut)"><span>&nbsp;&nbsp;Floor '+fNum2+' specific</span><span style="font-family:\'IBM Plex Mono\',monospace;font-weight:700;color:var(--navy)">+'+F(specificEv)+' NASF</span></div>';
+      }
     }
   }
-  h += '<div style="display:flex;justify-content:space-between;padding:10px 0;border-top:3px solid var(--clrCommunity);margin-top:6px"><span style="font-size:1rem;font-weight:900;color:var(--navy)">Total Upper Community</span><span style="font-family:\'IBM Plex Mono\',monospace;font-size:1.3rem;font-weight:700;color:var(--navy)">'+F(d.upperCommunityTotal)+' NASF</span></div>';
+  h += '<div style="display:flex;justify-content:space-between;font-size:.85rem;padding:3px 0;border-top:1px dashed var(--bdr)"><span style="color:var(--mut)">Total Upper Event</span><span style="font-family:\'IBM Plex Mono\',monospace;font-weight:700;color:var(--navy)">'+F(d.upperEventTotal)+' NASF</span></div>';
+  // Combined total
+  h += '<div style="display:flex;justify-content:space-between;padding:10px 0;border-top:3px solid var(--clrCommunity);margin-top:6px"><span style="font-size:1rem;font-weight:900;color:var(--navy)">Total Upper Floor Program</span><span style="font-family:\'IBM Plex Mono\',monospace;font-size:1.3rem;font-weight:700;color:var(--navy)">'+F(d.upperCommunityTotal + d.upperEventTotal)+' NASF</span></div>';
   h += '<div style="margin-top:8px"><button class="btn btn-navy btn-sm" onclick="addUC()">+ Add Upper Floor Item</button></div>';
   h += '</div>';
 
@@ -1426,7 +1460,8 @@ function toggleUC(i) { S.upperCommunity[i].on = !S.upperCommunity[i].on; render(
 function setUCNASF(i, v) { S.upperCommunity[i].nasf = parseInt(v) || 0; render(); }
 function renameUC(i, v) { S.upperCommunity[i].name = v.trim() || S.upperCommunity[i].name; }
 function setUCFloor(i, v) { S.upperCommunity[i].floor = (v === 'all' ? 'all' : String(v)); render(); }
-function addUC() { S.upperCommunity.push({ name:'New Upper Floor Item', nasf:200, on:true, floor:'all' }); render(); }
+function setUCCat(i, v) { S.upperCommunity[i].cat = (v === 'event' ? 'event' : 'community'); render(); }
+function addUC() { S.upperCommunity.push({ name:'New Upper Floor Item', nasf:200, on:true, floor:'all', cat:'community' }); render(); }
 function deleteUC(i) { S.upperCommunity.splice(i, 1); render(); }
 
 // ============================================================
@@ -1488,7 +1523,8 @@ function renderStacking(d) {
   for (var fc = 2; fc <= S.aboveGradeFloors; fc++) {
     var kc = String(fc);
     var commOnF = d.upperCommunityByFloor[kc] || 0;
-    var asgn = (floorBreak[kc].lab) + (floorBreak[kc].office) + corePerFloor + commOnF;
+    var evOnF   = d.upperEventByFloor[kc] || 0;
+    var asgn = (floorBreak[kc].lab) + (floorBreak[kc].office) + corePerFloor + commOnF + evOnF;
     upperDeficit = Math.max(upperDeficit, asgn - d.researchFloorNASF);
   }
 
@@ -1519,7 +1555,8 @@ function renderStacking(d) {
     var fOff = floorBreak[fk].office;
     var fPIs = floorBreak[fk].pis; // upper PIs assigned to this floor
     var fComm = d.upperCommunityByFloor[fk] || 0;
-    var fAssigned = fLab + fOff + corePerFloor + fComm;
+    var fEvent = d.upperEventByFloor[fk] || 0;
+    var fAssigned = fLab + fOff + corePerFloor + fComm + fEvent;
     var fDeficit = Math.max(0, fAssigned - d.researchFloorNASF);
     var unassigned = Math.max(0, d.researchFloorNASF - fAssigned);
     var segments = [
@@ -1528,6 +1565,7 @@ function renderStacking(d) {
       { label:'Core Facilities', nasf:corePerFloor, color:'var(--clrCore)' },
       { label:'Community', nasf:fComm, color:'var(--clrCommunity)' }
     ];
+    if (fEvent > 0) segments.push({ label:'Event', nasf:fEvent, color:'var(--clrEvent)' });
     if (unassigned > 0) segments.push({ label:'', nasf:unassigned, color:FICM.supportB });
     var floorCapacity = Math.max(d.researchFloorNASF, fAssigned);
     var pisLabel = (fPIs % 1 === 0) ? fPIs.toFixed(0) : fPIs.toFixed(1);
@@ -1676,12 +1714,13 @@ function renderStacking(d) {
     var fOff = floorBreak[fk].office;
     var fPIs = floorBreak[fk].pis;
     var fComm = d.upperCommunityByFloor[fk] || 0;
-    var fAssigned = fLab + fOff + corePerFloor + fComm;
+    var fEv = d.upperEventByFloor[fk] || 0;
+    var fAssigned = fLab + fOff + corePerFloor + fComm + fEv;
     var fDeficit = Math.max(0, fAssigned - d.researchFloorNASF);
     var floorUnassigned = Math.max(0, d.researchFloorNASF - fAssigned);
     var overStyle = fDeficit > 0 ? ' style="background:#FFEBEE"' : '';
     var pisLabel = (fPIs % 1 === 0) ? fPIs.toFixed(0) : fPIs.toFixed(1);
-    h += '<tr'+overStyle+'><td style="font-weight:700">Floor '+f+(fDeficit>0?' <span style="color:#E53935">\u26a0</span>':'')+'</td><td style="font-weight:700;color:var(--clrResearch)">'+pisLabel+'</td><td>'+F(S.aboveGradeGSF)+'</td><td style="color:var(--teal)">'+F(Math.round(S.aboveGradeGSF*S.deptGrossPct))+'</td><td>'+F(d.researchFloorNASF)+'</td><td>'+F(fLab)+'</td><td>'+F(fOff)+'</td><td>'+F(corePerFloor)+'</td><td>'+F(fComm)+'</td><td>\u2014</td><td>'+F(floorUnassigned)+'</td></tr>';
+    h += '<tr'+overStyle+'><td style="font-weight:700">Floor '+f+(fDeficit>0?' <span style="color:#E53935">\u26a0</span>':'')+'</td><td style="font-weight:700;color:var(--clrResearch)">'+pisLabel+'</td><td>'+F(S.aboveGradeGSF)+'</td><td style="color:var(--teal)">'+F(Math.round(S.aboveGradeGSF*S.deptGrossPct))+'</td><td>'+F(d.researchFloorNASF)+'</td><td>'+F(fLab)+'</td><td>'+F(fOff)+'</td><td>'+F(corePerFloor)+'</td><td>'+F(fComm)+'</td><td>'+(fEv>0?F(fEv):'\u2014')+'</td><td>'+F(floorUnassigned)+'</td></tr>';
   }
   var gfOverStyle = gfDeficit > 0 ? ' style="background:#FFEBEE"' : '';
   h += '<tr'+gfOverStyle+'><td style="font-weight:700">Floor 1 (Ground)'+(gfDeficit>0?' <span style="color:#E53935">\u26a0</span>':'')+'</td><td style="color:var(--mut)">\u2014</td><td>'+F(S.aboveGradeGSF)+'</td><td style="color:var(--teal)">'+F(Math.round(S.aboveGradeGSF*S.deptGrossPct))+'</td><td>'+F(d.gfNASF)+'</td><td>\u2014</td><td>\u2014</td><td>'+F(gfCoreNASF)+'</td><td>'+F(d.gfCommunity)+'</td><td>'+F(d.eventNASF)+'</td><td>'+F(gfRemaining)+'</td></tr>';
@@ -2886,65 +2925,80 @@ function buildPresetScenarios() {
       }
     },
     {
-      // Baseline V2 \u2014 same PI mix as Baseline, but uses the new floor-level
-      // controls: PIs are explicitly assigned to specific upper floors and the
-      // upper-community items are placed on specific floors instead of
-      // repeating uniformly. Reflects the dashboard JSON state captured
-      // 2026-04-28 with refined ground-floor program (Eng Commons + Cafe +
-      // Colloquium + 2 Classrooms + Loading + Bldg Support) and an expanded
-      // upper-community list (Living Room, Focus Room, Pantry, Meeting Rooms,
-      // Wellness, Farley/Clubs).
+      // Baseline V2 \u2014 mirrors the 2026-04-28 (rev 1) dashboard JSON capture.
+      // Demonstrates the new floor-level controls: per-floor PI assignment and
+      // per-floor placement of upper community/event items (Farley on F2,
+      // Clubs on F3, Dean's Suite on F4 \u2014 instead of repeating uniformly).
+      // Differs from Baseline V1 in:
+      //   \u2022 Ground floor efficiency 0.55 \u2192 0.70 (more usable GF NASF)
+      //   \u2022 Larger basement (40,000 GSF) and slightly smaller upper plate
+      //     (34,000 GSF) than V1
+      //   \u2022 Refined GF program with Lobby Seating added and 4 Classrooms
+      //     (instead of 2)
+      //   \u2022 Expanded upper-community list with Farley/Clubs/Dean's Suite as
+      //     floor-specific anchors
       name: '1B \u2014 Baseline Scenario V2',
-      desc: 'Same PI mix as Baseline, now using the new per-floor PI assignment and per-floor community placement. Captures the 2026-04-28 dashboard JSON: refined GF program, expanded upper-community list (Lounge, Focus, Pantry, Meeting, Wellness, Farley), 30 PIs, 22% core.',
+      desc: 'Per-floor PI assignment + per-floor upper program placement (Meeting Room & Farley on F2, Clubs on F3, Dean\'s Suite on F4). Mirrors the 2026-04-28 (rev 1) capture: 40K basement, 34K upper plates, refined GF program (Eng Commons, Colloquium, Cafe, 4 Classrooms, Loading, Bldg Support, Lobby Seating). 30 PIs, 22% core.',
       tweaks: function() {
-        // Envelope (matches imported JSON)
+        // Envelope (matches imported JSON top-level state)
         S.basementGSF = 40000;
         S.aboveGradeGSF = 34000;
         S.penthouseGSF = 24500;
-        // PI mix (same crosswalk as v1)
+        S.aboveGradeFloors = 4;
+        S.basementEff = 0.50;
+        S.aboveGradeEff = 0.70;
+        S.groundFloorEff = 0.70;  // bumped from 0.55 in V1
+        S.penthouseEff = 0.0;
+        // PI mix (same crosswalk as V1)
         S.types[0].pis=8;  S.types[1].pis=2;  S.types[2].pis=10;
         S.types[3].pis=4;  S.types[4].pis=3;  S.types[5].pis=1; S.types[6].pis=2;
         S.totalPIs = 30;
-        // Ground-floor program from the 2026-04-28 capture
+        // Ground-floor program (7 items from the JSON capture, Lobby Seating new)
         S.gfProgram = [
-          { name:'Eng Commons',                                nasf:6000, on:true,  cat:'community' },
+          { name:'Eng Commons',                                nasf:4000, on:true,  cat:'community' },
           { name:'Colloquium / Flex, 100p at Round Tables',    nasf:4000, on:true,  cat:'event'     },
           { name:'Cafe',                                       nasf:1900, on:true,  cat:'community' },
-          { name:'2 Classrooms, 40 Seats each',                nasf:2400, on:true,  cat:'event'     },
+          { name:'4 Classrooms, 40 Seats each',                nasf:4800, on:true,  cat:'event'     },
           { name:'Loading',                                    nasf:2000, on:true,  cat:'support'   },
-          { name:'Bldg Support (Storage, IT, Ops)',            nasf:2000, on:true,  cat:'support'   }
+          { name:'Bldg Support (Storage, IT, Ops)',            nasf:2000, on:true,  cat:'support'   },
+          { name:'Lobby Seating',                              nasf:2000, on:true,  cat:'community' }
         ];
-        // Refined upper-community items from the JSON capture, with new floor
-        // assignments demonstrating the V2 capability:
-        //   Lounge, Focus Room, Pantry, Wellness repeat on every floor
-        //   Meeting Room (8-10) is placed on Floor 2 (basement-adjacent collab)
-        //   Farley Center / Clubs is placed on Floor 4 (top-floor anchor)
+        // Upper-floor program (8 items from JSON capture). Farley/Clubs/Dean's
+        // are large per-floor anchors \u2014 Farley & Meeting Room on F2 (collab
+        // adjacency to ground), Clubs on F3, Dean's Suite on F4. The smaller
+        // amenities (lounge, focus, pantry, wellness) repeat on every floor.
+        // Categories: large gathering/event-style spaces are tagged 'event' so
+        // they roll into the building-wide Event NASF and render in the Event
+        // color on the floor stack. Lounge/focus/pantry/wellness are
+        // 'community'.
         S.upperCommunity = [
-          { name:'Living Room / Lounge',                                  nasf:800,  on:true, floor:'all' },
-          { name:'Focus Room (2 People)',                                 nasf:600,  on:true, floor:'all' },
-          { name:'Pantry',                                                nasf:500,  on:true, floor:'all' },
-          { name:'Meeting Room (8-10) People',                            nasf:850,  on:true, floor:'2'   },
-          { name:'Wellness Room/ Lactation Room',                         nasf:100,  on:true, floor:'all' },
-          { name:'Farley Center/ Clubs Distributed (12K Total, TS Help)', nasf:0,    on:true, floor:'4'   }
+          { name:'Living Room / Lounge',                       nasf:800,  on:true, floor:'all', cat:'community' },
+          { name:'Focus Room (2 People)',                      nasf:600,  on:true, floor:'all', cat:'community' },
+          { name:'Pantry',                                     nasf:500,  on:true, floor:'all', cat:'community' },
+          { name:'Meeting Room (8-10) People',                 nasf:850,  on:true, floor:'2',   cat:'community' },
+          { name:'Wellness Room/ Lactation Room',              nasf:100,  on:true, floor:'all', cat:'community' },
+          { name:'Farley Center',                              nasf:2000, on:true, floor:'2',   cat:'event'     },
+          { name:'Clubs',                                      nasf:5000, on:true, floor:'3',   cat:'event'     },
+          { name:'Dean\'s Suite',                              nasf:3000, on:true, floor:'4',   cat:'community' }
         ];
-        // Per-floor PI assignment (excludes basement-only PIs).
-        // Basement-only PIs (Wet Bio 3, Wet Chem 3, Optics 2, Optnano 2) keep
-        // their lab in the basement; only their desks + offices count upstairs.
-        // Pool sizes:
-        //   wetbio  upper = 8 - 3 = 5
-        //   wetchem upper = 2 - 3 = 0 (clipped)
-        //   dryelec upper = 10 - 0 = 10
-        //   comp    upper = 4 - 0 = 4
-        //   optics  upper = 3 - 2 = 1
-        //   optnano upper = 1 - 2 = 0 (clipped)
-        //   custom_1775851246404 upper = 2 - 0 = 2
+        // Per-floor PI assignment from the JSON capture (excludes basement-
+        // only PIs). Floor 4 leans dry/comp; Floor 2 keeps the higher-intensity
+        // wet/optics group adjacent to basement core.
+        //   wetbio  pool = 8 - 3 = 5  \u2192  F2:2 + F3:2 + F4:1 = 5
+        //   wetchem pool = 0 (basement over-allocates)
+        //   dryelec pool = 10        \u2192  F2:2 + F3:3 + F4:5 = 10
+        //   comp    pool = 4         \u2192  F2:0 + F3:1 + F4:3 = 4
+        //   optics  pool = 1         \u2192  F2:1
+        //   optnano pool = 0 (basement over-allocates)
+        //   large   pool = 2         \u2192  F2:1 + F3:1
         S.piFloorAllocation = {
           '2': { wetbio:2, wetchem:0, dryelec:2, comp:0, optics:1, optnano:0, custom_1775851246404:1 },
           '3': { wetbio:2, wetchem:0, dryelec:3, comp:1, optics:0, optnano:0, custom_1775851246404:1 },
           '4': { wetbio:1, wetchem:0, dryelec:5, comp:3, optics:0, optnano:0, custom_1775851246404:0 }
         };
         S.basementAllocation = { wetbio:3, wetchem:3, dryelec:0, comp:0, optics:2, optnano:2, custom_1775851246404:0 };
-        // Core item adjustment (matches Baseline tweak)
+        // Core item adjustment (matches Baseline tweak \u2014 Battery scaled to
+        // basement capacity)
         S.coreItems[4].nasf = 1750;
       }
     },
@@ -4299,12 +4353,13 @@ function _legacyExportXLSXStub() {
   commRows.push(['GF Event NASF', d.eventNASF, '', '']);
   commRows.push(['GF Support NASF', d.gfSupport, '', '']);
   commRows.push([]);
-  commRows.push(['UPPER FLOOR COMMUNITY']);
-  commRows.push(['Space','NASF','Floor Assignment','Included']);
+  commRows.push(['UPPER FLOOR PROGRAM (community + event)']);
+  commRows.push(['Space','NASF','Category','Floor Assignment','Included']);
   S.upperCommunity.forEach(function(u) {
     var fl = u.floor || 'all';
     var flLabel = fl === 'all' ? 'All floors' : ('Floor ' + fl);
-    commRows.push([u.name, u.nasf, flLabel, u.on ? 'Yes' : 'No']);
+    var cat = u.cat || 'community';
+    commRows.push([u.name, u.nasf, cat, flLabel, u.on ? 'Yes' : 'No']);
   });
   commRows.push([]);
   commRows.push(['Per Floor Total', d.upperCommunityPerFloor, '']);
