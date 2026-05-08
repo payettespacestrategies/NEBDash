@@ -174460,6 +174460,35 @@ function C() {
   // Expose the new bucket so cards can label it explicitly when relevant.
   var academicOtherNASF = _academicAll;
 
+  // v0.5.40: dedicated Collaboration NASF (across gfProgram + upperCommunity,
+  // with per-floor multiplier on upper repeats). Used by the new Research-
+  // overall + Research-breakdown donuts on the Scenarios + Floor Stacking
+  // tabs. Faculty + flex office NASF is broken out from bldgOffice for the
+  // same use; bldgOffice keeps its existing combined meaning.
+  var collabNASF = 0;
+  function _addCollab(it, isUpper) {
+    if (!it || !it.on) return;
+    if (String(it.cat || '').toLowerCase() !== 'collaboration') return;
+    var fl = String(it.floor || '').toLowerCase();
+    var mult = (isUpper && (fl === 'upper' || fl === 'all')) ? researchFloors : 1;
+    collabNASF += (it.nasf || 0) * mult;
+  }
+  (S.gfProgram      || []).forEach(function(it){ _addCollab(it, false); });
+  (S.upperCommunity || []).forEach(function(it){ _addCollab(it, true);  });
+  // Faculty + flex offices roll up to a single "Faculty Offices" slice in the
+  // research-breakdown donut. Keep the split in case we need them later.
+  var bldgFacultyOnly = 0, bldgFlexOnly = 0;
+  (S.types || []).forEach(function(t){
+    bldgFacultyOnly += (t.facultyOffice || 0) * (t.pis || 0);
+    bldgFlexOnly    += (t.flexOffice    || 0) * (t.pis || 0);
+  });
+  var facultyOfficeNASF = bldgFacultyOnly + bldgFlexOnly; // === bldgOffice
+  // Research Overall (new): labs + lab support + write-up + faculty office +
+  // shared labs + collaboration. Used by the updated Scenarios summary donut
+  // and the Floor-Stacking program-fill replacement.
+  var researchOverallNASF = bldgOpenLab + bldgLabSupport + bldgDesk
+                          + facultyOfficeNASF + coreNASF + collabNASF;
+
   // Energy model — kBTU by space type, % of GSF allocation, total kBTU
   var eui = S.energyEUI;
   var energyBreakdown = [];
@@ -174589,6 +174618,7 @@ function C() {
     upperEventSpecificTotal:upperEventSpecificTotal,
     totalDemand:totalDemand, surplus:surplus, academicOtherNASF:academicOtherNASF,
     bldgOpenLab:bldgOpenLab, bldgLabSupport:bldgLabSupport, bldgDesk:bldgDesk, bldgOffice:bldgOffice,
+    collabNASF:collabNASF, facultyOfficeNASF:facultyOfficeNASF, researchOverallNASF:researchOverallNASF,
     energyBreakdown:energyBreakdown, totalKBTU:totalKBTU, buildingEUI:buildingEUI,
     cost: calcCost(totalGSF, totalNASF, piNASF, coreNASF, communityNASFActual, eventNASF, gfSupport, typeBreakdown, bldgOpenLab, bldgLabSupport, bldgDesk),
   };
@@ -175068,24 +175098,13 @@ function renderMix(d) {
   h += '<div class="legend-item"><div class="legend-dot" style="background:var(--clrCommunity)"></div>Community</div>';
   h += '</div></div>';
 
-  // PI sliders
-  h += '<div class="g2"><div class="card"><div class="card-title">PI Distribution</div>';
-  h += '<div style="margin-bottom:10px"><label class="sl">Total PIs</label><div class="sl-row"><input type="range" min="10" max="60" step="1" value="'+S.totalPIs+'" oninput="S.totalPIs=parseInt(this.value);render()"><div class="sl-val">'+S.totalPIs+'</div></div></div>';
-  S.types.forEach(function(t,i){
-    var gn = d.typeBreakdown[i].groupNASF;
-    h += '<div style="margin-bottom:8px"><label class="sl" style="color:'+t.color+'">'+t.label+' <span style="font-weight:400;color:var(--mut)">('+F(gn)+' NASF/group)</span></label>';
-    h += '<div class="sl-row"><input type="range" min="0" max="'+Math.max(20,t.pis+5)+'" step="1" value="'+t.pis+'" oninput="setPIs('+i+',this.value)"><div class="sl-val" style="color:'+t.color+'">'+t.pis+'</div></div></div>';
-  });
-  h += '<div style="padding:10px 0;border-top:2px solid var(--navy);display:flex;justify-content:space-between"><span style="font-size:1.05rem;font-weight:900;color:var(--navy)">Assigned PIs</span><span style="font-family:\'IBM Plex Mono\',monospace;font-size:1.4rem;font-weight:700;color:'+(d.totalPIs===S.totalPIs?'var(--navy)':'var(--coral)')+'">'+d.totalPIs+' / '+S.totalPIs+'</span></div>';
-  h += '</div>';
-
-  // Right: breakdown — distribute large lab NASF into constituent typologies
+  // v0.5.40: NASF Breakdown by Lab Type — bar chart + table side-by-side
+  // (was stacked) — moves above the PI Distribution cards.
   var mergedBreakdown = mergeLargeLabBreakdown(d.typeBreakdown);
   h += '<div class="card"><div class="card-title">NASF Breakdown by Lab Type</div>';
-  h += '<div class="card-sub">Large Lab NASF distributed into constituent types (' + Object.keys(S.largeMix).map(function(k){ var t = S.types.find(function(x){return x.id===k}); return Math.round(S.largeMix[k]*100)+'% '+(t?t.label:k); }).join(', ') + ')</div>';
-  h += renderBarChart(mergedBreakdown.filter(function(t){return t.totalNASF>0}), 'totalNASF', 'label', 'color');
-  h += '<div style="margin-top:16px">';
-  h += '<table class="comp"><tr><th>Lab Type</th><th>PIs</th><th>NASF/Group</th><th>Total NASF</th><th>% of Labs</th></tr>';
+  h += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:18px;align-items:start">';
+  h += '<div>'+renderBarChart(mergedBreakdown.filter(function(t){return t.totalNASF>0}), 'totalNASF', 'label', 'color')+'</div>';
+  h += '<div><table class="comp"><tr><th>Lab Type</th><th>PIs</th><th>NASF/Group</th><th>Total NASF</th><th>% of Labs</th></tr>';
   mergedBreakdown.forEach(function(t){
     if (t.totalNASF === 0) return;
     var pct = d.piNASF > 0 ? Math.round(t.totalNASF / d.piNASF * 100) : 0;
@@ -175093,11 +175112,122 @@ function renderMix(d) {
     h += '<tr><td style="font-weight:700;color:'+t.color+'">'+t.label+'</td><td>'+piLabel+'</td><td>'+F(t.groupNASF)+'</td><td style="font-weight:700">'+F(t.totalNASF)+'</td><td>'+pct+'%</td></tr>';
   });
   h += '<tr style="background:var(--navy)"><td style="color:#fff;font-weight:700" colspan="3">TOTAL RESEARCH &amp; OFFICE</td><td style="color:#fff;font-weight:700">'+F(d.piNASF)+'</td><td style="color:#fff;font-weight:700">100%</td></tr>';
-  h += '</table></div></div></div>';
+  h += '</table></div>';
+  h += '</div></div>';
+
+  // v0.5.40: PI Distribution by thematic category. Each card is a small slider
+  // group with its own typology mix; the four defaults (Remote Environments,
+  // Optimize Human Health, Climate Resilient Communities, Embodied AI) can be
+  // renamed, added to, or removed. PI counts roll up into S.types[].pis.
+  _ensurePiCategories();
+  h += '<div class="card"><div class="card-title" style="display:flex;align-items:center;gap:10px">PI Distribution by Thematic Category';
+  h += '<button class="btn btn-sm btn-navy" style="margin-left:auto" onclick="addPiCategory()">+ Add Category</button>';
+  h += '</div>';
+  h += '<div style="display:grid;grid-template-columns:repeat('+Math.max(1, S.piCategories.length)+',minmax(200px,1fr));gap:10px;align-items:start">';
+  S.piCategories.forEach(function(cat, ci){
+    var catTotal = 0;
+    S.types.forEach(function(t){ catTotal += +(cat.mix[t.id] || 0); });
+    h += '<div class="card" style="padding:10px;border-left:4px solid var(--clrResearch);background:#fff">';
+    h += '<div style="display:flex;align-items:center;gap:4px;margin-bottom:6px">';
+    h += '<input type="text" value="'+(cat.name||'').replace(/"/g,'&quot;')+'" oninput="renamePiCategory('+ci+',this.value)" style="flex:1;border:1px solid var(--bdr);border-radius:5px;padding:4px 6px;font-size:.85rem;font-weight:700;color:var(--navy);font-family:inherit" title="Rename category">';
+    h += '<button class="btn btn-sm btn-out" style="color:var(--coral);border-color:var(--coral);padding:2px 8px;font-size:.7rem" onclick="deletePiCategory('+ci+')" title="Delete category">×</button>';
+    h += '</div>';
+    h += '<div style="font-size:.7rem;color:var(--mut);text-transform:uppercase;letter-spacing:.05em;font-weight:600;margin-bottom:6px">'+catTotal+' PIs in this theme</div>';
+    S.types.forEach(function(t){
+      var v = +(cat.mix[t.id] || 0);
+      var maxPI = Math.max(15, v + 3);
+      h += '<div style="margin-bottom:5px">';
+      h += '<label class="sl" style="color:'+t.color+';font-size:.7rem;display:flex;justify-content:space-between;align-items:baseline;margin-bottom:1px">';
+      h += '<span>'+t.label+'</span><span style="font-family:\'IBM Plex Mono\',monospace;font-weight:700;color:'+t.color+'">'+v+'</span>';
+      h += '</label>';
+      h += '<input type="range" min="0" max="'+maxPI+'" step="1" value="'+v+'" oninput="setPiCategoryMix('+ci+',\''+t.id+'\',this.value)" style="width:100%;accent-color:'+t.color+'">';
+      h += '</div>';
+    });
+    h += '</div>';
+  });
+  h += '</div>';   // close grid
+  // Roll-up footer
+  var assignedPIs = 0;
+  S.piCategories.forEach(function(c){ S.types.forEach(function(t){ assignedPIs += +(c.mix[t.id]||0); }); });
+  h += '<div style="padding:10px 0 0;margin-top:10px;border-top:2px solid var(--navy);display:flex;justify-content:space-between;align-items:baseline">';
+  h += '<span style="font-size:1rem;font-weight:900;color:var(--navy)">Assigned PIs (across themes)</span>';
+  h += '<span style="font-family:\'IBM Plex Mono\',monospace;font-size:1.3rem;font-weight:700;color:'+(assignedPIs===S.totalPIs?'var(--navy)':'var(--coral)')+'">'+assignedPIs+' / '+S.totalPIs+'</span>';
+  h += '</div>';
+  h += '<div style="margin-top:6px"><label class="sl" style="font-size:.78rem">Total PIs (cap)</label><div class="sl-row"><input type="range" min="10" max="60" step="1" value="'+S.totalPIs+'" oninput="S.totalPIs=parseInt(this.value);render()"><div class="sl-val">'+S.totalPIs+'</div></div></div>';
+  h += '</div>';
   return h;
 }
 
+// v0.5.40: legacy single-slider path. With piCategories live, this still
+// updates S.types[i].pis directly when a caller (e.g. scenarios) flips a
+// typology count outside the new card. The category-aware setter is
+// `setPiCategoryMix` below.
 function setPIs(i, val) { S.types[i].pis = parseInt(val); render(); }
+
+// v0.5.40: thematic PI categories. Default seed mirrors the current PI
+// distribution split as evenly as possible across the four research themes.
+var _PI_DEFAULT_CATEGORIES = [
+  { id: 'remote_environments',     name: 'Remote Environments' },
+  { id: 'optimize_human_health',   name: 'Optimize Human Health' },
+  { id: 'climate_resilient',       name: 'Climate Resilient Communities' },
+  { id: 'embodied_ai',             name: 'Embodied AI' }
+];
+
+function _ensurePiCategories() {
+  if (Array.isArray(S.piCategories) && S.piCategories.length > 0) return;
+  // Seed: split each typology's existing pis evenly across the 4 default
+  // themes (any leftover going to the first theme so the totals match).
+  S.piCategories = _PI_DEFAULT_CATEGORIES.map(function(c){ return { id:c.id, name:c.name, mix:{} }; });
+  (S.types || []).forEach(function(t){
+    var n = S.piCategories.length;
+    var per = Math.floor((t.pis || 0) / n);
+    var rem = (t.pis || 0) - per * n;
+    S.piCategories.forEach(function(cat, ci){
+      cat.mix[t.id] = per + (ci < rem ? 1 : 0);
+    });
+  });
+  _syncTypePIsFromCategories();
+}
+
+function _syncTypePIsFromCategories() {
+  // S.types[i].pis is the single source of truth for the rest of the
+  // dashboard math. Recompute it as the sum across thematic categories.
+  if (!Array.isArray(S.piCategories)) return;
+  (S.types || []).forEach(function(t){
+    var sum = 0;
+    S.piCategories.forEach(function(cat){ sum += +(cat.mix[t.id] || 0); });
+    t.pis = sum;
+  });
+}
+
+function setPiCategoryMix(catIdx, typeId, val) {
+  var v = Math.max(0, parseInt(val) || 0);
+  if (!S.piCategories[catIdx]) return;
+  S.piCategories[catIdx].mix[typeId] = v;
+  _syncTypePIsFromCategories();
+  render();
+}
+
+function renamePiCategory(catIdx, val) {
+  if (!S.piCategories[catIdx]) return;
+  S.piCategories[catIdx].name = val.trim() || S.piCategories[catIdx].name;
+}
+
+function addPiCategory() {
+  _ensurePiCategories();
+  var n = S.piCategories.length + 1;
+  var newCat = { id: 'theme_' + Date.now(), name: 'New Theme ' + n, mix: {} };
+  (S.types || []).forEach(function(t){ newCat.mix[t.id] = 0; });
+  S.piCategories.push(newCat);
+  render();
+}
+
+function deletePiCategory(catIdx) {
+  if (!Array.isArray(S.piCategories) || S.piCategories.length <= 1) return;
+  S.piCategories.splice(catIdx, 1);
+  _syncTypePIsFromCategories();
+  render();
+}
 
 // ============================================================
 // TAB 4: SHARED FACILITIES
@@ -175316,11 +175446,14 @@ function renderCommunity(d) {
       catSel += '<option value="'+c+'"'+(cat===c?' selected':'')+'>'+c+'</option>';
     });
     catSel += '</select>';
-    // Build floor select with this item's value selected
-    var sel = '<select onchange="setUCFloor('+i+',this.value)" style="font-size:.72rem;width:96px" title="Assign to a specific upper floor or leave on All floors">';
-    sel += '<option value="all"'+(fl==='all'?' selected':'')+'>All floors</option>';
+    // Build floor select with this item's value selected.
+    // v0.5.40: abbreviated labels — U×N for the all-floors option, raw floor
+    // numbers (2,3,…) for floor-specific items. Underlying values unchanged.
+    var _ucResearchFloors = Math.max(0, (S.aboveGradeFloors || 0) - 1);
+    var sel = '<select onchange="setUCFloor('+i+',this.value)" style="font-size:.72rem;width:60px" title="Assign to a specific upper floor or use U×N to repeat on every research floor">';
+    sel += '<option value="all"'+(fl==='all'?' selected':'')+'>U×'+_ucResearchFloors+'</option>';
     for (var fNum = 2; fNum <= S.aboveGradeFloors; fNum++) {
-      sel += '<option value="'+fNum+'"'+(String(fl)===String(fNum)?' selected':'')+'>Floor '+fNum+'</option>';
+      sel += '<option value="'+fNum+'"'+(String(fl)===String(fNum)?' selected':'')+'>'+fNum+'</option>';
     }
     sel += '</select>';
     h += '<div style="display:flex;align-items:center;gap:6px;padding:6px 0;border-bottom:1px solid var(--bdr)">';
@@ -176822,77 +176955,12 @@ function renderScenarios(d) {
   var h = '';
 
   // ── CURRENT PROGRAM SUMMARY (always visible) ──
-  h += '<div class="card"><div class="card-title">Current Program Summary</div>';
-  h += '<div style="display:flex;flex-wrap:wrap;gap:24px;align-items:flex-start;justify-content:center">';
-
-  // Donut chart — v0.5.36: collaboration, learning sub-cats, offices, and
-  // basement-bound program items roll into "Collab + Office + Learning"
-  // so the donut sums match the per-floor stacking visuals.
-  var researchLabOffice = d.piNASF;
-  var donutSegs = [
-    { label:'Research Lab & Office', value:researchLabOffice, color:'var(--clrResearch)' },
-    { label:'Shared Facilities', value:d.coreNASF, color:'var(--clrCore)' },
-    { label:'Community', value:d.communityNASFActual, color:'var(--clrCommunity)' },
-    { label:'Collab + Office + Learning', value:(d.academicOtherNASF||0), color:'#9EDDD1' },
-    { label:'Event', value:d.eventNASF, color:'var(--clrEvent)' },
-    { label:'Building Support', value:d.gfSupport||0, color:'var(--clrSupport)' },
-    { label:'Unassigned', value:Math.max(0, d.surplus), color:'#E7E7E7' },
-  ];
-  h += '<div style="flex:0 0 auto">' + renderDonut(donutSegs, d.totalNASF, F(d.totalNASF), 'Total NASF', 240) + '</div>';
-
-  // Program list with Research meta-category
-  h += '<div style="flex:1;min-width:260px">';
-  var researchTotal = d.piNASF + d.coreNASF;
-  h += '<div style="font-weight:800;font-size:1rem;color:var(--navy);margin-bottom:10px;border-bottom:2px solid var(--navy);padding-bottom:6px">Program Categories</div>';
-
-  // Research meta-category (expandable)
-  var resPct = d.totalNASF > 0 ? (researchTotal / d.totalNASF * 100) : 0;
-  h += '<div style="background:rgba(242,170,156,0.1);border-radius:10px;padding:10px 12px;margin-bottom:8px">';
-  h += '<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">';
-  h += '<div style="width:14px;height:14px;border-radius:3px;background:var(--clrResearch);flex:none"></div>';
-  h += '<span style="flex:1;font-size:.95rem;font-weight:800;color:var(--navy)">Research Overall</span>';
-  h += '<span style="font-family:\'IBM Plex Mono\',monospace;font-size:.95rem;font-weight:800;color:var(--navy)">'+F(researchTotal)+'</span>';
-  h += '<span style="font-size:.78rem;color:var(--mut);min-width:40px;text-align:right">'+resPct.toFixed(0)+'%</span>';
-  h += '</div>';
-  // Sub-items
-  var subItems = [
-    { label:'Research Lab & Office', nasf:d.piNASF, color:FICM.resA },
-    { label:'Shared Facilities', nasf:d.coreNASF, color:FICM.specA },
-  ];
-  subItems.forEach(function(si) {
-    h += '<div style="display:flex;align-items:center;gap:8px;padding-left:22px;margin-bottom:3px">';
-    h += '<div style="width:8px;height:8px;border-radius:2px;background:'+si.color+';flex:none"></div>';
-    h += '<span style="flex:1;font-size:.82rem;font-weight:600;color:var(--navy)">'+si.label+'</span>';
-    h += '<span style="font-family:\'IBM Plex Mono\',monospace;font-size:.82rem;font-weight:600;color:var(--navy)">'+F(si.nasf)+'</span>';
-    h += '</div>';
-  });
-  h += '</div>';
-
-  // Other categories — v0.5.36: collab/learning/office now show as "Collab + Office + Learning"
-  var otherCats = [
-    { label:'Community', nasf:d.communityNASFActual, color:'var(--clrCommunity)' },
-    { label:'Collab + Office + Learning', nasf:(d.academicOtherNASF||0), color:'#9EDDD1' },
-    { label:'Event', nasf:d.eventNASF, color:'var(--clrEvent)' },
-    { label:'Building Support', nasf:d.gfSupport||0, color:'var(--clrSupport)' },
-    { label:'Unassigned', nasf:Math.max(0, d.surplus), color:'#E7E7E7' },
-  ];
-  otherCats.forEach(function(c) {
-    var pct = d.totalNASF > 0 ? (c.nasf / d.totalNASF * 100) : 0;
-    h += '<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">';
-    h += '<div style="width:14px;height:14px;border-radius:3px;background:'+c.color+';flex:none"></div>';
-    h += '<span style="flex:1;font-size:.88rem;font-weight:600;color:var(--navy)">'+c.label+'</span>';
-    h += '<span style="font-family:\'IBM Plex Mono\',monospace;font-size:.88rem;font-weight:700;color:var(--navy)">'+F(c.nasf)+'</span>';
-    h += '<span style="font-size:.78rem;color:var(--mut);min-width:40px;text-align:right">'+pct.toFixed(0)+'%</span>';
-    h += '</div>';
-  });
-
-  // Totals
-  h += '<div style="display:flex;align-items:center;gap:8px;margin-top:8px;padding-top:8px;border-top:2px solid var(--navy)">';
-  h += '<span style="flex:1;font-size:1rem;font-weight:900;color:var(--navy)">Total Programmed</span>';
-  h += '<span style="font-family:\'IBM Plex Mono\',monospace;font-size:1rem;font-weight:900;color:var(--navy)">'+F(d.totalDemand)+'</span>';
-  h += '</div>';
-  h += '</div>';
-  h += '</div></div>';
+  // v0.5.40: Research Overall now folds Collaboration in alongside labs +
+  // shared facilities + faculty offices + write-up. Two donut cards side by
+  // side: (1) overall building summary, (2) research breakdown by FICM
+  // sub-category with Unprogrammed shown in light grey so the donut totals
+  // match the building NASF capacity (mirrors Floor Stacking).
+  h += _skillBuildResearchSummaryCards(d);
 
   // Utilization bar
   h += '<div class="card"><div class="card-title">Program vs. Building Capacity</div>';
@@ -179933,11 +180001,8 @@ function renderAcademicSpaceV5(d) {
 
   ['ground','upper'].forEach(function(scope) {
     var cardTitle = (scope === 'upper') ? 'Upper Floor Program' : 'Ground Floor Program';
-    var cardSub   = (scope === 'upper')
-      ? 'Items that repeat on every research floor (upper) or are pinned to a specific level. Edit category, qty, NASF/each, seats, and occupancy as needed.'
-      : 'Items pinned to the ground floor. Edit category, qty, NASF/each, seats, and occupancy. Use the Floor dropdown to move an item upstairs.';
+    // v0.5.40: card-level helper text removed per Tom — generally not useful.
     h += '<div class="card"><div class="card-title">'+cardTitle+'</div>';
-    h += '<div class="card-sub">'+cardSub+'</div>';
 
     sections.forEach(function(sec) {
     // v0.5.34: each of Community + Collab now has its OWN target validation
@@ -179965,7 +180030,7 @@ function renderAcademicSpaceV5(d) {
     } else {
       h += '<h3 style="font-size:1.05rem;font-weight:700;color:var(--navy);margin:14px 0 6px">'+sec.title+'</h3>';
     }
-    h += '<div class="card-sub" style="margin-bottom:8px">'+sec.tip+'</div>';
+    // v0.5.40: per-section grey tip removed per Tom — generally not useful.
 
     // Planning panels:
     //   - Collaboration section: SF/Person + combined-% panel
@@ -180112,20 +180177,34 @@ function renderAcademicSpaceV5(d) {
       h += '</div>';
     }
 
+    // v0.5.40: only show the Category column when the section spans more than
+    // one category. Community / Collaboration cards have a single category, so
+    // the dropdown is meaningless and just steals horizontal space.
+    var hasCategoryCol = sec.cats.length > 1;
     var headers;
     if (sec.perUnit && sec.hasOcc) {
       // Office: qty + occupancy-based metrics
-      headers = ['Item','Category','Qty','NASF/<br>Ea','Occ/<br>Ea','Total<br>NASF','People','Floor','On?','Notes','Action'];
+      headers = hasCategoryCol
+        ? ['Item','Category','Qty','NASF/<br>Ea','Occ/<br>Ea','Total<br>NASF','People','Floor','On?','Notes','Action']
+        : ['Item','Qty','NASF/<br>Ea','Occ/<br>Ea','Total<br>NASF','People','Floor','On?','Notes','Action'];
     } else if (sec.perUnit && sec.perSeat) {
       // Learning: qty + per-seat targets (no occupancy)
-      headers = ['Item','Category','Qty','NASF/<br>Ea','Total<br>NASF','Seats','SF/<br>Seat','Floor','On?','Notes','Action'];
+      headers = hasCategoryCol
+        ? ['Item','Category','Qty','NASF/<br>Ea','Total<br>NASF','Seats','SF/<br>Seat','Floor','On?','Notes','Action']
+        : ['Item','Qty','NASF/<br>Ea','Total<br>NASF','Seats','SF/<br>Seat','Floor','On?','Notes','Action'];
     } else if (sec.perUnit) {
       // Community / Collaboration: qty only
-      headers = ['Item','Category','Qty','NASF/<br>Ea','Total<br>NASF','Floor','On?','Notes','Action'];
+      headers = hasCategoryCol
+        ? ['Item','Category','Qty','NASF/<br>Ea','Total<br>NASF','Floor','On?','Notes','Action']
+        : ['Item','Qty','NASF/<br>Ea','Total<br>NASF','Floor','On?','Notes','Action'];
     } else if (sec.perSeat) {
-      headers = ['Item','Category','NASF','Seats','SF/seat','Floor','On?','Notes','Action'];
+      headers = hasCategoryCol
+        ? ['Item','Category','NASF','Seats','SF/seat','Floor','On?','Notes','Action']
+        : ['Item','NASF','Seats','SF/seat','Floor','On?','Notes','Action'];
     } else {
-      headers = ['Item','Category','NASF','Floor','On?','Notes','Action'];
+      headers = hasCategoryCol
+        ? ['Item','Category','NASF','Floor','On?','Notes','Action']
+        : ['Item','NASF','Floor','On?','Notes','Action'];
     }
     var notesStyle = "width:90px;font-size:.78rem;color:var(--navy);padding:4px 6px;border:1.5px solid var(--bdr);border-radius:6px;font-family:inherit";
     // v0.5.33: each table gets its own horizontal-scroll wrapper so the
@@ -180144,12 +180223,16 @@ function renderAcademicSpaceV5(d) {
       var m = META[item.cat] || {};
       h += '<tr>';
       h += '<td><input type="text" value="'+(item.name||'').replace(/"/g,'&quot;')+'" oninput="_skillEditItem(\''+src+'\','+idx+',\'name\',this.value)" style="'+inpStyle+'"><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:'+(m.hex||'#888')+';margin-left:8px;vertical-align:middle"></span></td>';
-      h += '<td><select onchange="_skillEditItem(\''+src+'\','+idx+',\'cat\',this.value);render()" style="font-size:.95rem;padding:6px 8px">'
-        +  sec.cats.map(function(c){
-            var displayLabel = (META[c]||{}).label || c.replace(/_/g,' ');
-            return '<option value="'+c+'"'+(c===item.cat?' selected':'')+'>'+displayLabel+'</option>';
-          }).join('')
-        +  '</select></td>';
+      // v0.5.40: only render the Category cell when this section spans
+      // multiple cats (header is suppressed above for single-cat sections).
+      if (hasCategoryCol) {
+        h += '<td><select onchange="_skillEditItem(\''+src+'\','+idx+',\'cat\',this.value);render()" style="font-size:.95rem;padding:6px 8px">'
+          +  sec.cats.map(function(c){
+              var displayLabel = (META[c]||{}).label || c.replace(/_/g,' ');
+              return '<option value="'+c+'"'+(c===item.cat?' selected':'')+'>'+displayLabel+'</option>';
+            }).join('')
+          +  '</select></td>';
+      }
       if (sec.perUnit) {
         // Qty × NASF/each is the canonical sizing. Office (hasOcc) gets
         // occupancy_each + People columns; non-office sections skip those.
@@ -180197,21 +180280,21 @@ function renderAcademicSpaceV5(d) {
           h += '<td style="font-family:\'IBM Plex Mono\',monospace;font-weight:700;color:'+sfColor+';text-align:center">'+(sfPerSeat != null ? sfPerSeat.toFixed(1) : '—')+'</td>';
         }
       }
-      h += '<td><select onchange="_skillSetItemFloor(\''+src+'\','+idx+',this.value)" style="font-size:.95rem;padding:6px 8px">';
-      // Floor select. 'upper' = repeat on every research floor (×N hint).
-      // Legacy 'all' is normalized to 'upper' by the migration above, but we
-      // also accept it on the selected check so old scenarios still highlight.
+      // v0.5.40: abbreviated floor labels — B / G / U×N / 2..N — to keep the
+      // column narrow. Underlying values are unchanged.
+      h += '<td><select onchange="_skillSetItemFloor(\''+src+'\','+idx+',this.value)" style="font-size:.95rem;padding:6px 8px;min-width:62px">';
       var _selFloor = String(item.floor || '').toLowerCase();
       if (_selFloor === 'all') _selFloor = 'upper';
-      var _upperLabel = 'upper (×' + researchFloors + ')';
-      // v0.5.32: only show floor numbers that actually exist in the project
-      // (2..S.aboveGradeFloors). The hard-coded 2..10 list previously offered
-      // floor levels that didn't exist in the building.
+      var _upperLabel = 'U×' + researchFloors;
       var _topFloor = (S.aboveGradeFloors || 1);
       var _floorOpts = ['ground','upper','basement'];
       for (var _f = 2; _f <= _topFloor; _f++) _floorOpts.push(String(_f));
       _floorOpts.forEach(function(f){
-        var label = (f === 'upper') ? _upperLabel : f;
+        var label;
+        if (f === 'upper')           label = _upperLabel;
+        else if (f === 'ground')     label = 'G';
+        else if (f === 'basement')   label = 'B';
+        else                         label = f;
         h += '<option value="'+f+'"'+(_selFloor===f?' selected':'')+'>'+label+'</option>';
       });
       h += '</select></td>';
@@ -180442,16 +180525,21 @@ function renderProgramSupportV5(d) {
     h += '<tr>';
     h += '<td><input type="text" value="'+(item.name||'').replace(/"/g,'&quot;')+'" oninput="_skillEditItem(\''+src+'\','+idx+',\'name\',this.value)" style="'+inpStyle+'"></td>';
     h += '<td><input type="number" value="'+item.nasf+'" onchange="_skillEditItem(\''+src+'\','+idx+',\'nasf\',this.value)" style="'+numStyle+'"></td>';
-    h += '<td><select onchange="_skillSetItemFloor(\''+src+'\','+idx+',this.value)" style="font-size:.95rem;padding:6px 8px">';
+    // v0.5.40: abbreviated floor labels (B/G/U×N/2..N) to keep column narrow.
+    h += '<td><select onchange="_skillSetItemFloor(\''+src+'\','+idx+',this.value)" style="font-size:.95rem;padding:6px 8px;min-width:62px">';
     var _selFloor = String(item.floor || '').toLowerCase();
     if (_selFloor === 'all') _selFloor = 'upper';
     var _researchFloors = Math.max(0, (S.aboveGradeFloors || 0) - 1);
-    var _upperLabel = 'upper (×' + _researchFloors + ')';
+    var _upperLabel = 'U×' + _researchFloors;
     var _topFloor = (S.aboveGradeFloors || 1);
     var _floorOpts = ['basement','ground','upper'];
     for (var _f = 2; _f <= _topFloor; _f++) _floorOpts.push(String(_f));
     _floorOpts.forEach(function(f){
-      var label = (f === 'upper') ? _upperLabel : f;
+      var label;
+      if (f === 'upper')         label = _upperLabel;
+      else if (f === 'ground')   label = 'G';
+      else if (f === 'basement') label = 'B';
+      else                       label = f;
       h += '<option value="'+f+'"'+(_selFloor===f?' selected':'')+'>'+label+'</option>';
     });
     h += '</select></td>';
@@ -181309,7 +181397,144 @@ function _skillReplaceCapacityCard(html, d) {
     ''
   );
   // Build the new card and inject at the very top of Floor Stacking content.
-  return _skillBuildProgramFillCard(d) + html;
+  // v0.5.40: Floor Stacking now uses the same summary + research-breakdown
+  // pair the Scenarios tab uses (with the Unprogrammed slice already baked in
+  // by _skillBuildResearchSummaryCards), so the two views stay in sync.
+  return _skillBuildResearchSummaryCards(d) + html;
+}
+
+// v0.5.40: shared summary card pair used on Scenarios + Floor Stacking.
+// Emits two cards side by side:
+//   1. "Current Program Summary" — overall building donut (Research Overall,
+//      Community, Office + Learning, Event, Building Support, Unprogrammed)
+//   2. "Research Breakdown" — research-only donut (Open Lab, Lab Support,
+//      Shared Labs, Write-Up Desks, Faculty Offices, Collaboration,
+//      Unprogrammed) + per-slice list, all FICM colors.
+function _skillBuildResearchSummaryCards(d) {
+  var totNasf            = d.totalNASF || 0;
+  var openLab            = d.bldgOpenLab    || 0;
+  var labSupport         = d.bldgLabSupport || 0;
+  var writeUp            = d.bldgDesk       || 0;
+  var faculty            = d.facultyOfficeNASF || 0;
+  var sharedLabs         = d.coreNASF      || 0;
+  var collab             = d.collabNASF    || 0;
+  var researchOverall    = (d.researchOverallNASF != null)
+                           ? d.researchOverallNASF
+                           : (openLab + labSupport + writeUp + faculty + sharedLabs + collab);
+  var community          = d.communityNASFActual || 0;
+  var event              = d.eventNASF || 0;
+  var bldgSupport        = d.gfSupport || 0;
+  var officeLearning     = Math.max(0, (d.academicOtherNASF || 0) - collab - bldgSupport);
+  var allProgrammed      = researchOverall + community + officeLearning + event + bldgSupport;
+  var unprogrammed       = Math.max(0, totNasf - allProgrammed);
+
+  // FICM-driven colors. The research-only donut uses the FICM family for
+  // research/specialty/office; collaboration keeps its existing yellow swatch
+  // so it stays recognizable on the rest of the dashboard.
+  var COL_OPEN_LAB      = FICM.resA;       // #F28D79 — research darkest
+  var COL_LAB_SUPPORT   = FICM.resB;       // #F2AA9C — research mid
+  var COL_WRITE_UP      = FICM.resC;       // #F9D9C7 — research light
+  var COL_FACULTY       = FICM.officeA;    // #98ACE5 — office darkest
+  var COL_SHARED_LABS   = FICM.specA;      // #E068B5 — specialty darkest
+  var COL_COLLAB        = '#FFE885';       // FICM 3d — collaboration yellow
+  var COL_UNPROGRAMMED  = '#E0DBD5';       // light warm grey
+
+  // Build research-breakdown slices (skip empty ones so the donut/list don't
+  // render hairline wedges).
+  var resSlices = [];
+  function _push(label, nasf, color) { if (nasf > 0) resSlices.push({ label:label, value:nasf, nasf:nasf, color:color }); }
+  _push('Open Lab',        openLab,    COL_OPEN_LAB);
+  _push('Lab Support',     labSupport, COL_LAB_SUPPORT);
+  _push('Shared Labs',     sharedLabs, COL_SHARED_LABS);
+  _push('Write-Up Desks',  writeUp,    COL_WRITE_UP);
+  _push('Faculty Offices', faculty,    COL_FACULTY);
+  _push('Collaboration',   collab,     COL_COLLAB);
+  _push('Unprogrammed',    unprogrammed, COL_UNPROGRAMMED);
+
+  // Overall building donut. Research Overall uses the research family color.
+  var overallSegs = [
+    { label:'Research Overall',    value:researchOverall, color:'var(--clrResearch)' },
+    { label:'Community',           value:community,       color:'var(--clrCommunity)' },
+    { label:'Office + Learning',   value:officeLearning,  color:'#9EDDD1' },
+    { label:'Event',               value:event,           color:'var(--clrEvent)' },
+    { label:'Building Support',    value:bldgSupport,     color:'var(--clrSupport)' },
+    { label:'Unprogrammed',        value:unprogrammed,    color:COL_UNPROGRAMMED },
+  ];
+
+  function _pctOf(n, tot) { return tot > 0 ? (n / tot * 100) : 0; }
+
+  var h = '<div class="g2" style="grid-template-columns:1fr 1fr;gap:14px;align-items:start">';
+
+  // ── Card 1: overall summary ──
+  h += '<div class="card"><div class="card-title">Current Program Summary</div>';
+  h += '<div style="display:flex;flex-wrap:wrap;gap:18px;align-items:flex-start">';
+  h += '<div style="flex:0 0 auto">' + renderDonut(overallSegs, totNasf, F(totNasf), 'Total NASF', 220) + '</div>';
+  h += '<div style="flex:1;min-width:200px">';
+  h += '<div style="font-weight:800;font-size:.95rem;color:var(--navy);margin-bottom:8px;border-bottom:2px solid var(--navy);padding-bottom:5px">Program Categories</div>';
+  // Research meta-row + sub-rows
+  var resPct = _pctOf(researchOverall, totNasf);
+  h += '<div style="background:rgba(242,170,156,0.10);border-radius:10px;padding:8px 10px;margin-bottom:6px">';
+  h += '<div style="display:flex;align-items:center;gap:6px">';
+  h += '<div style="width:12px;height:12px;border-radius:3px;background:var(--clrResearch);flex:none"></div>';
+  h += '<span style="flex:1;font-size:.88rem;font-weight:800;color:var(--navy)">Research Overall</span>';
+  h += '<span style="font-family:\'IBM Plex Mono\',monospace;font-size:.88rem;font-weight:800;color:var(--navy)">'+F(researchOverall)+'</span>';
+  h += '<span style="font-size:.74rem;color:var(--mut);min-width:34px;text-align:right">'+resPct.toFixed(0)+'%</span>';
+  h += '</div>';
+  resSlices.forEach(function(si) {
+    if (si.label === 'Unprogrammed') return;
+    h += '<div style="display:flex;align-items:center;gap:6px;padding-left:18px;margin-top:3px">';
+    h += '<div style="width:8px;height:8px;border-radius:2px;background:'+si.color+';flex:none"></div>';
+    h += '<span style="flex:1;font-size:.78rem;font-weight:600;color:var(--navy)">'+si.label+'</span>';
+    h += '<span style="font-family:\'IBM Plex Mono\',monospace;font-size:.78rem;font-weight:600;color:var(--navy)">'+F(si.nasf)+'</span>';
+    h += '</div>';
+  });
+  h += '</div>';
+  // Other categories
+  [{label:'Community',color:'var(--clrCommunity)',v:community},
+   {label:'Office + Learning',color:'#9EDDD1',v:officeLearning},
+   {label:'Event',color:'var(--clrEvent)',v:event},
+   {label:'Building Support',color:'var(--clrSupport)',v:bldgSupport},
+   {label:'Unprogrammed',color:COL_UNPROGRAMMED,v:unprogrammed}
+  ].forEach(function(c){
+    h += '<div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">';
+    h += '<div style="width:12px;height:12px;border-radius:3px;background:'+c.color+';flex:none"></div>';
+    h += '<span style="flex:1;font-size:.82rem;font-weight:600;color:var(--navy)">'+c.label+'</span>';
+    h += '<span style="font-family:\'IBM Plex Mono\',monospace;font-size:.82rem;font-weight:700;color:var(--navy)">'+F(c.v)+'</span>';
+    h += '<span style="font-size:.74rem;color:var(--mut);min-width:34px;text-align:right">'+_pctOf(c.v,totNasf).toFixed(0)+'%</span>';
+    h += '</div>';
+  });
+  h += '<div style="display:flex;align-items:center;gap:6px;margin-top:6px;padding-top:6px;border-top:2px solid var(--navy)">';
+  h += '<span style="flex:1;font-size:.92rem;font-weight:900;color:var(--navy)">Total Programmed</span>';
+  h += '<span style="font-family:\'IBM Plex Mono\',monospace;font-size:.92rem;font-weight:900;color:var(--navy)">'+F(allProgrammed)+'</span>';
+  h += '</div>';
+  h += '</div>'; // close right column
+  h += '</div>'; // close flex
+  h += '</div>'; // close card 1
+
+  // ── Card 2: research breakdown ──
+  h += '<div class="card"><div class="card-title">Research Breakdown</div>';
+  h += '<div style="display:flex;flex-wrap:wrap;gap:18px;align-items:flex-start">';
+  h += '<div style="flex:0 0 auto">' + renderDonut(resSlices, totNasf, F(researchOverall), 'Research NASF', 220) + '</div>';
+  h += '<div style="flex:1;min-width:200px">';
+  h += '<div style="font-weight:800;font-size:.95rem;color:var(--navy);margin-bottom:8px;border-bottom:2px solid var(--navy);padding-bottom:5px">FICM Sub-categories</div>';
+  resSlices.forEach(function(s){
+    h += '<div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">';
+    h += '<div style="width:12px;height:12px;border-radius:3px;background:'+s.color+';flex:none"></div>';
+    h += '<span style="flex:1;font-size:.82rem;font-weight:600;color:var(--navy)">'+s.label+'</span>';
+    h += '<span style="font-family:\'IBM Plex Mono\',monospace;font-size:.82rem;font-weight:700;color:var(--navy)">'+F(s.nasf)+'</span>';
+    h += '<span style="font-size:.74rem;color:var(--mut);min-width:34px;text-align:right">'+_pctOf(s.nasf,totNasf).toFixed(0)+'%</span>';
+    h += '</div>';
+  });
+  h += '<div style="display:flex;align-items:center;gap:6px;margin-top:6px;padding-top:6px;border-top:2px solid var(--navy)">';
+  h += '<span style="flex:1;font-size:.92rem;font-weight:900;color:var(--navy)">Research Overall</span>';
+  h += '<span style="font-family:\'IBM Plex Mono\',monospace;font-size:.92rem;font-weight:900;color:var(--clrResearch)">'+F(researchOverall)+'</span>';
+  h += '</div>';
+  h += '</div>'; // close right column
+  h += '</div>'; // close flex
+  h += '</div>'; // close card 2
+
+  h += '</div>'; // close g2
+  return h;
 }
 
 function _skillBuildProgramFillCard(d) {
