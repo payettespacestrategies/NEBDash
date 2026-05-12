@@ -175123,22 +175123,47 @@ function renderMix(d) {
   h += '<div class="card"><div class="card-title" style="display:flex;align-items:center;gap:10px">PI Distribution by Thematic Category';
   h += '<button class="btn btn-sm btn-navy" style="margin-left:auto" onclick="addPiCategory()">+ Add Category</button>';
   h += '</div>';
+  // v0.5.42: each category card now has a theme-level slider that adjusts
+  // the category's % of total research NASF. Typology sliders within a card
+  // show their % of the *category* (not of total research).
+  var _gnByType = {};
+  (d.typeBreakdown || []).forEach(function(tb){ _gnByType[tb.id] = tb.groupNASF || 0; });
+  var _totalResearchNASF = d.piNASF || 0;
   h += '<div style="display:grid;grid-template-columns:repeat('+Math.max(1, S.piCategories.length)+',minmax(200px,1fr));gap:10px;align-items:start">';
   S.piCategories.forEach(function(cat, ci){
     var catTotal = 0;
-    S.types.forEach(function(t){ catTotal += +(cat.mix[t.id] || 0); });
+    var catNASF = 0;
+    S.types.forEach(function(t){
+      var n = +(cat.mix[t.id] || 0);
+      catTotal += n;
+      catNASF += n * (_gnByType[t.id] || 0);
+    });
+    var catPct = _totalResearchNASF > 0 ? (catNASF / _totalResearchNASF * 100) : 0;
     h += '<div class="card" style="padding:10px;border-left:4px solid var(--clrResearch);background:#fff">';
     h += '<div style="display:flex;align-items:center;gap:4px;margin-bottom:6px">';
     h += '<input type="text" value="'+(cat.name||'').replace(/"/g,'&quot;')+'" oninput="renamePiCategory('+ci+',this.value)" style="flex:1;border:1px solid var(--bdr);border-radius:5px;padding:4px 6px;font-size:.85rem;font-weight:700;color:var(--navy);font-family:inherit" title="Rename category">';
     h += '<button class="btn btn-sm btn-out" style="color:var(--coral);border-color:var(--coral);padding:2px 8px;font-size:.7rem" onclick="deletePiCategory('+ci+')" title="Delete category">×</button>';
     h += '</div>';
-    h += '<div style="font-size:.7rem;color:var(--mut);text-transform:uppercase;letter-spacing:.05em;font-weight:600;margin-bottom:6px">'+catTotal+' PIs in this theme</div>';
+    h += '<div style="font-size:.7rem;color:var(--mut);text-transform:uppercase;letter-spacing:.05em;font-weight:600;margin-bottom:6px">'+catTotal+' PIs &middot; '+F(catNASF)+' SF</div>';
+    // v0.5.42: theme-share slider. Dragging scales PI counts in this category
+    // and inversely scales the other categories so total research NASF stays
+    // roughly constant (otherwise the thumb would drift as denom moves).
+    var _catPctStep = 0.5;
+    h += '<div style="margin-bottom:8px;padding-bottom:8px;border-bottom:1px dashed var(--bdr)">';
+    h += '<label class="sl" style="font-size:.72rem;color:var(--clrResearch);display:flex;justify-content:space-between;align-items:baseline;margin-bottom:1px">';
+    h += '<span style="font-weight:700">Theme share of research</span>';
+    h += '<span style="font-family:\'IBM Plex Mono\',monospace;font-weight:700">'+catPct.toFixed(1)+'%</span>';
+    h += '</label>';
+    h += '<input type="range" min="0" max="100" step="'+_catPctStep+'" value="'+catPct.toFixed(1)+'" oninput="setCategoryShare('+ci+',this.value)" style="width:100%;accent-color:var(--clrResearch)">';
+    h += '</div>';
     S.types.forEach(function(t){
       var v = +(cat.mix[t.id] || 0);
       var maxPI = Math.max(15, v + 3);
+      var typoNASF = v * (_gnByType[t.id] || 0);
+      var typoPct = catNASF > 0 ? (typoNASF / catNASF * 100) : 0;
       h += '<div style="margin-bottom:5px">';
-      h += '<label class="sl" style="color:'+t.color+';font-size:.7rem;display:flex;justify-content:space-between;align-items:baseline;margin-bottom:1px">';
-      h += '<span>'+t.label+'</span><span style="font-family:\'IBM Plex Mono\',monospace;font-weight:700;color:'+t.color+'">'+v+'</span>';
+      h += '<label class="sl" style="color:'+t.color+';font-size:.7rem;display:flex;justify-content:space-between;align-items:baseline;margin-bottom:1px;gap:6px">';
+      h += '<span>'+t.label+'</span><span style="font-family:\'IBM Plex Mono\',monospace;font-weight:700;color:'+t.color+';white-space:nowrap" title="'+v+' PIs &middot; '+F(typoNASF)+' SF &middot; '+typoPct.toFixed(1)+'% of this theme">'+v+' PI &middot; '+typoPct.toFixed(1)+'%</span>';
       h += '</label>';
       h += '<input type="range" min="0" max="'+maxPI+'" step="1" value="'+v+'" oninput="setPiCategoryMix('+ci+',\''+t.id+'\',this.value)" style="width:100%;accent-color:'+t.color+'">';
       h += '</div>';
@@ -175204,6 +175229,83 @@ function setPiCategoryMix(catIdx, typeId, val) {
   var v = Math.max(0, parseInt(val) || 0);
   if (!S.piCategories[catIdx]) return;
   S.piCategories[catIdx].mix[typeId] = v;
+  _syncTypePIsFromCategories();
+  render();
+}
+
+// v0.5.42: set a category's target share of total research NASF.
+// Scales PI counts in this category up/down, and proportionally scales
+// the other categories inversely so total research NASF stays ~constant.
+// Without the inverse scaling the slider would visually drift as the
+// denominator (total research NASF) changes with each move.
+function setCategoryShare(catIdx, targetPctStr) {
+  if (!S.piCategories[catIdx]) return;
+  var targetPct = Math.max(0, Math.min(100, parseFloat(targetPctStr) || 0)) / 100;
+  // Per-type group NASF (single source of truth).
+  var gn = {};
+  (S.types || []).forEach(function(t){ gn[t.id] = calcGroupNASF(t); });
+  // Each category's current NASF.
+  var catNASFs = S.piCategories.map(function(cat){
+    var n = 0;
+    (S.types || []).forEach(function(t){ n += (+(cat.mix[t.id] || 0)) * (gn[t.id] || 0); });
+    return n;
+  });
+  var totalNASF = catNASFs.reduce(function(a,b){ return a + b; }, 0);
+  if (totalNASF <= 0) {
+    // Nothing exists anywhere yet — seed this cat with 1 PI per typology
+    // that has a non-zero group NASF, so the slider becomes responsive.
+    if (targetPct > 0) {
+      (S.types || []).forEach(function(t){
+        if ((gn[t.id] || 0) > 0) S.piCategories[catIdx].mix[t.id] = 1;
+      });
+    }
+    _syncTypePIsFromCategories();
+    render();
+    return;
+  }
+  var targetCatNASF = totalNASF * targetPct;
+  var otherOldNASF = totalNASF - catNASFs[catIdx];
+  var otherNewNASF = Math.max(0, totalNASF - targetCatNASF);
+  // Scale factor for OTHER cats so total stays constant.
+  var otherScale = otherOldNASF > 0 ? (otherNewNASF / otherOldNASF) : 0;
+  if (catNASFs[catIdx] > 0) {
+    // Normal path: scale this cat's PI counts by thisScale.
+    var thisScale = targetCatNASF / catNASFs[catIdx];
+    S.piCategories.forEach(function(cat, ci){
+      var s = (ci === catIdx) ? thisScale : otherScale;
+      (S.types || []).forEach(function(t){
+        var current = +(cat.mix[t.id] || 0);
+        cat.mix[t.id] = Math.max(0, Math.round(current * s));
+      });
+    });
+  } else if (targetPct > 0) {
+    // Cat was empty — seed it proportionally across typologies that
+    // already exist somewhere in the program (so we honor the current
+    // typology mix). Falls back to even distribution if nothing else has PIs.
+    var globalMix = {};
+    var globalTotal = 0;
+    (S.types || []).forEach(function(t){
+      var n = 0;
+      S.piCategories.forEach(function(cat, ci){ if (ci !== catIdx) n += +(cat.mix[t.id] || 0); });
+      globalMix[t.id] = n;
+      globalTotal += n;
+    });
+    var typesWithSpace = (S.types || []).filter(function(t){ return (gn[t.id] || 0) > 0; });
+    if (typesWithSpace.length === 0) { render(); return; }
+    typesWithSpace.forEach(function(t){
+      var share = globalTotal > 0 ? (globalMix[t.id] / globalTotal) : (1 / typesWithSpace.length);
+      var seedNASF = targetCatNASF * share;
+      S.piCategories[catIdx].mix[t.id] = Math.max(share > 0 ? 1 : 0, Math.round(seedNASF / gn[t.id]));
+    });
+    // Scale other cats inversely.
+    S.piCategories.forEach(function(cat, ci){
+      if (ci === catIdx) return;
+      (S.types || []).forEach(function(t){
+        var current = +(cat.mix[t.id] || 0);
+        cat.mix[t.id] = Math.max(0, Math.round(current * otherScale));
+      });
+    });
+  }
   _syncTypePIsFromCategories();
   render();
 }
@@ -179082,31 +179184,53 @@ function mountRadar() {
 var MEP_CEILING_FT = 14, MEP_AIR_DENSITY = 0.0752, MEP_CP_AIR = 0.24,
     MEP_DELTA_T = 20, MEP_BTU_PER_TON = 12000, MEP_KW_PER_TON = 3.517;
 
+// v0.5.41: Technical Criteria fields renamed + new Structural section.
+//   HVAC: lab.hvac.pressure now drives the "HVAC Notes" label (free text;
+//         pressure-call-outs still fit, but the field is now a notes scratchpad).
+//   Electrical: power_demand_wpsf labelled "Open Lab", power_installed labelled
+//         "Lab Support" — same W/sf storage, no calc change. "Lighting"
+//         renamed to "Ambient Lighting"; the old dropdown becomes a numeric
+//         "Task Lighting" field (fc) backed by elec.task_lighting_fc.
+//   New Structural section reads from lab.structural — { vibration,
+//         ceiling_height, casework_notes }. Existing saved labs that lack
+//         these keys fall back to 'TBD'.
 var mepLabs = [
   { id:'optics-hi', name:'Optics', subtitle:'Higher Intensity', theme:'th-optics-hi', nsf:1615,
     hvac:{ ach_occ:'6', ach_unocc:'4', pressure:'Negative', filtration:'MERV 14', fumehoods_per_pi:'1', supp_hvac:'Fan Coil Units' },
     thermal:{ temp_summer:'70°F', temp_winter:'70°F', rh_summer:'<55% RH', rh_winter:'<30% RH', tolerance:'±2°F / ±5% RH', humidity_ctrl:'Standard' },
-    elec:{ power_demand_wpsf:'5', power_installed:'10', lighting_fc:'50', lighting_wpsf:'TBD' }, proc_wpsf:1.5 },
+    elec:{ power_demand_wpsf:'5', power_installed:'10', lighting_fc:'50', task_lighting_fc:'TBD', lighting_wpsf:'TBD' },
+    structural:{ vibration:'Class A-B', ceiling_height:'14 ft', casework_notes:'Optical tables; minimize fixed casework' },
+    proc_wpsf:1.5 },
   { id:'optics-lo', name:'Optics', subtitle:'Lower Intensity', theme:'th-optics-lo', nsf:1200,
     hvac:{ ach_occ:'6', ach_unocc:'4', pressure:'Negative', filtration:'MERV 14', fumehoods_per_pi:'0', supp_hvac:'Active Chilled Beams' },
     thermal:{ temp_summer:'68°F', temp_winter:'68°F', rh_summer:'15% ±5%', rh_winter:'15% ±5%', tolerance:'±2°F / 0.5°F/hr max', humidity_ctrl:'Desiccant dryer' },
-    elec:{ power_demand_wpsf:'10', power_installed:'20', lighting_fc:'50', lighting_wpsf:'TBD' }, proc_wpsf:5.0 },
+    elec:{ power_demand_wpsf:'10', power_installed:'20', lighting_fc:'50', task_lighting_fc:'TBD', lighting_wpsf:'TBD' },
+    structural:{ vibration:'Class A', ceiling_height:'14 ft', casework_notes:'TBD' },
+    proc_wpsf:5.0 },
   { id:'wet-chem', name:'Wet Chem', subtitle:'', theme:'th-wet-chem', nsf:1965,
     hvac:{ ach_occ:'6', ach_unocc:'4', pressure:'Negative', filtration:'MERV 14', fumehoods_per_pi:'2', supp_hvac:'Fan Coil Units' },
     thermal:{ temp_summer:'70°F', temp_winter:'70°F', rh_summer:'<55% RH', rh_winter:'<30% RH', tolerance:'±2°F / ±5% RH', humidity_ctrl:'Standard' },
-    elec:{ power_demand_wpsf:'5', power_installed:'10', lighting_fc:'50', lighting_wpsf:'TBD' }, proc_wpsf:3.0 },
+    elec:{ power_demand_wpsf:'5', power_installed:'10', lighting_fc:'50', task_lighting_fc:'TBD', lighting_wpsf:'TBD' },
+    structural:{ vibration:'Office (per IEST)', ceiling_height:'14 ft', casework_notes:'Fume-hood-intensive; flexible wet benches' },
+    proc_wpsf:3.0 },
   { id:'wet-bio', name:'Wet Bio', subtitle:'', theme:'th-wet-bio', nsf:1615,
     hvac:{ ach_occ:'6', ach_unocc:'4', pressure:'Negative', filtration:'MERV 14', fumehoods_per_pi:'1', supp_hvac:'Fan Coil Units' },
     thermal:{ temp_summer:'70°F', temp_winter:'70°F', rh_summer:'<55% RH', rh_winter:'<30% RH', tolerance:'±2°F / ±5% RH', humidity_ctrl:'Standard' },
-    elec:{ power_demand_wpsf:'5', power_installed:'10', lighting_fc:'50', lighting_wpsf:'TBD' }, proc_wpsf:1.5 },
+    elec:{ power_demand_wpsf:'5', power_installed:'10', lighting_fc:'50', task_lighting_fc:'TBD', lighting_wpsf:'TBD' },
+    structural:{ vibration:'Office (per IEST)', ceiling_height:'14 ft', casework_notes:'Mix of fixed wet benches + mobile' },
+    proc_wpsf:1.5 },
   { id:'dry', name:'Dry', subtitle:'', theme:'th-dry', nsf:1485,
     hvac:{ ach_occ:'TBD', ach_unocc:'TBD', pressure:'TBD', filtration:'MERV 14', fumehoods_per_pi:'0', supp_hvac:'Fan Coil Units' },
     thermal:{ temp_summer:'TBD', temp_winter:'TBD', rh_summer:'TBD', rh_winter:'TBD', tolerance:'TBD', humidity_ctrl:'TBD' },
-    elec:{ power_demand_wpsf:'TBD', power_installed:'TBD', lighting_fc:'TBD', lighting_wpsf:'TBD' }, proc_wpsf:0.5 },
+    elec:{ power_demand_wpsf:'TBD', power_installed:'TBD', lighting_fc:'TBD', task_lighting_fc:'TBD', lighting_wpsf:'TBD' },
+    structural:{ vibration:'TBD', ceiling_height:'TBD', casework_notes:'TBD' },
+    proc_wpsf:0.5 },
   { id:'robotics', name:'Robotics', subtitle:'', theme:'th-robotics', nsf:1400,
     hvac:{ ach_occ:'TBD', ach_unocc:'TBD', pressure:'TBD', filtration:'MERV 14', fumehoods_per_pi:'0', supp_hvac:'Fan Coil Units' },
     thermal:{ temp_summer:'TBD', temp_winter:'TBD', rh_summer:'TBD', rh_winter:'TBD', tolerance:'TBD', humidity_ctrl:'TBD' },
-    elec:{ power_demand_wpsf:'TBD', power_installed:'TBD', lighting_fc:'TBD', lighting_wpsf:'TBD' }, proc_wpsf:0 },
+    elec:{ power_demand_wpsf:'TBD', power_installed:'TBD', lighting_fc:'TBD', task_lighting_fc:'TBD', lighting_wpsf:'TBD' },
+    structural:{ vibration:'TBD', ceiling_height:'TBD', casework_notes:'TBD' },
+    proc_wpsf:0 },
 ];
 
 function mepCalcLoads(lab) {
@@ -179127,10 +179251,14 @@ function mepIsNA(v)  { return ['N/A','NONE','NO'].indexOf(String(v).trim().toUpp
 function mepCls(v)   { if (mepIsTBD(v)) return 'f-val tbd'; if (mepIsNA(v)) return 'f-val na'; return 'f-val'; }
 
 function mepPct(lab) {
+  var struct = lab.structural || {};
   var all = []
     .concat(Object.keys(lab.hvac).map(function(k){ return lab.hvac[k]; }))
     .concat(Object.keys(lab.thermal).map(function(k){ return lab.thermal[k]; }))
-    .concat([lab.elec.power_demand_wpsf, lab.elec.power_installed, lab.elec.lighting_fc, lab.elec.lighting_wpsf]);
+    // v0.5.42: dropped lighting_wpsf from the completeness check (the
+    // consultant-input row no longer renders, so it shouldn't gate %).
+    .concat([lab.elec.power_demand_wpsf, lab.elec.power_installed, lab.elec.lighting_fc, lab.elec.task_lighting_fc])
+    .concat([struct.vibration || 'TBD', struct.ceiling_height || 'TBD', struct.casework_notes || 'TBD']);
   var done = all.filter(function(v){ return !mepIsTBD(String(v)); }).length;
   return Math.round(done / all.length * 100);
 }
@@ -179169,18 +179297,12 @@ function mepThermalRow(label, temp, rh) {
 }
 
 function mepCard(lab) {
-  var loads = mepCalcLoads(lab);
   var p = mepPct(lab);
-  var kwDisplay = loads.elecKW != null ? Math.round(loads.elecKW) : '—';
-  var lightingType = lab.elec.lighting_type || 'Ambient';
-  var lwpsf = String(lab.elec.lighting_wpsf);
-  var lwTbd = mepIsTBD(lwpsf);
-  var engWrap = 'f-input-wrap engineer'+(lwTbd?' tbd':'');
-  var engNum  = 'f-num'+(lwTbd?' tbd':'');
-  var engineerHtml = '<div class="field-row">'+
-    '<span class="f-label eng-label">Lighting (consultant input)</span>'+
-    '<div class="'+engWrap+'"><span class="'+engNum+'" contenteditable="true" spellcheck="false">'+lwpsf+'</span><span class="f-unit">W/sf</span></div>'+
-    '</div>';
+
+  // v0.5.41: Structural section reads from lab.structural — older saved
+  // labs without the section still render (fallback values are 'TBD').
+  var struct = lab.structural || {};
+  var taskLightingFc = (lab.elec.task_lighting_fc != null) ? lab.elec.task_lighting_fc : 'TBD';
 
   return '<div class="mep-card" data-id="'+lab.id+'">'+
     '<div class="mep-card-header '+lab.theme+'">'+
@@ -179194,7 +179316,10 @@ function mepCard(lab) {
       '<div class="mep-section"><div class="sec-label">HVAC</div>'+
         mepNumField('Air Changes (Occupied)',   lab.hvac.ach_occ,   'ACH')+
         mepNumField('Air Changes (Unoccupied)', lab.hvac.ach_unocc, 'ACH')+
-        mepField('Space Pressure',              lab.hvac.pressure)+
+        // v0.5.41: "Space Pressure" relabelled as the freeform "HVAC Notes"
+        // scratch field — storage key (lab.hvac.pressure) unchanged so prior
+        // values still surface.
+        mepField('HVAC Notes',                  lab.hvac.pressure)+
         mepField('Filtration',                  lab.hvac.filtration)+
         mepNumField('Fume Hoods',               lab.hvac.fumehoods_per_pi, 'per PI')+
         mepDropdownField('Supplemental HVAC',   lab.hvac.supp_hvac, ['Fan Coil Units','Active Chilled Beams','Passive Chilled Beams','RAHU'])+
@@ -179205,13 +179330,25 @@ function mepCard(lab) {
         mepField('Tolerance',            lab.thermal.tolerance)+
         mepField('Humidity Control',     lab.thermal.humidity_ctrl)+
       '</div>'+
+      // v0.5.42: dropped the "Calculated" kW row and "Lighting (consultant
+      // input)" engineer row per Tom — kW still rolls into the page-level
+      // summary strip via mepCalcLoads, but no longer surfaces in-card.
       '<div class="mep-section"><div class="sec-label">Electrical</div>'+
-        mepNumField('Power Demand',    lab.elec.power_demand_wpsf, 'W/sf demand')+
-        mepNumField('Power Installed', lab.elec.power_installed,   'W/sf installed')+
-        mepNumField('Calculated',      kwDisplay, 'kW', true)+
-        mepNumField('Lighting',        lab.elec.lighting_fc,  'fc')+
-        mepDropdownField('Lighting Type', lightingType, ['Ambient','Task'])+
-        engineerHtml+
+        // v0.5.41: relabelled to "Open Lab" + "Lab Support" power densities
+        // (W/sf). Storage keys unchanged so mepCalcLoads still computes kW.
+        mepNumField('Open Lab',        lab.elec.power_demand_wpsf, 'W/sf')+
+        mepNumField('Lab Support',     lab.elec.power_installed,   'W/sf')+
+        mepNumField('Ambient Lighting', lab.elec.lighting_fc,  'fc')+
+        // v0.5.41: was a dropdown ['Ambient','Task']; now a numeric Task
+        // Lighting (fc) field mirroring Ambient Lighting.
+        mepNumField('Task Lighting',    taskLightingFc, 'fc')+
+      '</div>'+
+      // v0.5.41: Structural section — vibration class, ceiling height,
+      // lab-casework notes. All free-text.
+      '<div class="mep-section"><div class="sec-label">Structural</div>'+
+        mepField('Vibration Requirements', struct.vibration       || 'TBD')+
+        mepField('Ceiling Height',         struct.ceiling_height  || 'TBD')+
+        mepField('Lab Casework Notes',     struct.casework_notes  || 'TBD')+
       '</div>'+
     '</div>'+
   '</div>';
@@ -179495,7 +179632,10 @@ function _skillDefaultMepRow(name, color, sourceType) {
     nsf: 1500,
     hvac:    { ach_occ:'6.2', ach_unocc:'4', pressure:'Negative', filtration:'MERV 14', fumehoods_per_pi:'1', supp_hvac:'Fan Coil Units' },
     thermal: { temp_summer:'72°F', temp_winter:'68°F', rh_summer:'50% RH', rh_winter:'30% RH', tolerance:'±2°F / ±5% RH', humidity_ctrl:'Standard' },
-    elec:    { power_demand_wpsf:'5', power_installed:'10', lighting_fc:'50', lighting_wpsf:'TBD', lighting_type:'Ambient' },
+    // v0.5.41: task_lighting_fc replaces the old lighting_type dropdown.
+    elec:    { power_demand_wpsf:'5', power_installed:'10', lighting_fc:'50', task_lighting_fc:'TBD', lighting_wpsf:'TBD' },
+    // v0.5.41: structural section for vibration / ceiling height / casework.
+    structural: { vibration:'TBD', ceiling_height:'TBD', casework_notes:'TBD' },
     proc_wpsf: 1.5
   };
 }
