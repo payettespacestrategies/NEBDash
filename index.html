@@ -175123,12 +175123,24 @@ function renderMix(d) {
   h += '<div class="card"><div class="card-title" style="display:flex;align-items:center;gap:10px">PI Distribution by Thematic Category';
   h += '<button class="btn btn-sm btn-navy" style="margin-left:auto" onclick="addPiCategory()">+ Add Category</button>';
   h += '</div>';
-  // v0.5.42: each category card now has a theme-level slider that adjusts
-  // the category's % of total research NASF. Typology sliders within a card
-  // show their % of the *category* (not of total research).
+  // v0.5.45: each category card carries an INDEPENDENT theme-share slider.
+  // The displayed % is the stored cat.targetPct (a pure planning target —
+  // what % of research SF this theme should claim), not a value derived
+  // from PI×NASF. Dragging one card's slider scales only that card's PIs
+  // and leaves every other card's slider and PI counts untouched. Per-card
+  // PI subtotal + SF subtotal still reflect actual current values so the
+  // user can see how close the realized mix is to the target. The sum of
+  // targets across all cards drives a traffic-light color on each card's
+  // share slider: red when > 100%, green at 100%, yellow when < 100%.
   var _gnByType = {};
   (d.typeBreakdown || []).forEach(function(tb){ _gnByType[tb.id] = tb.groupNASF || 0; });
   var _totalResearchNASF = d.piNASF || 0;
+  // Traffic-light color from the SUM of stored targets across all cards.
+  var _targetSum = 0;
+  S.piCategories.forEach(function(c){ _targetSum += +(c.targetPct || 0); });
+  var _shareColor = (_targetSum > 100.05) ? 'var(--coral)'
+                  : (_targetSum > 99.95)  ? 'var(--green)'
+                  :                         'var(--gold)';
   h += '<div style="display:grid;grid-template-columns:repeat('+Math.max(1, S.piCategories.length)+',minmax(200px,1fr));gap:10px;align-items:start">';
   S.piCategories.forEach(function(cat, ci){
     var catTotal = 0;
@@ -175138,29 +175150,24 @@ function renderMix(d) {
       catTotal += n;
       catNASF += n * (_gnByType[t.id] || 0);
     });
-    var catPct = _totalResearchNASF > 0 ? (catNASF / _totalResearchNASF * 100) : 0;
+    var actualPct = _totalResearchNASF > 0 ? (catNASF / _totalResearchNASF * 100) : 0;
+    var _share = +(cat.targetPct || 0);
     h += '<div class="card" style="padding:10px;border-left:4px solid var(--clrResearch);background:#fff">';
     h += '<div style="display:flex;align-items:center;gap:4px;margin-bottom:6px">';
     h += '<input type="text" value="'+(cat.name||'').replace(/"/g,'&quot;')+'" oninput="renamePiCategory('+ci+',this.value)" style="flex:1;border:1px solid var(--bdr);border-radius:5px;padding:4px 6px;font-size:.85rem;font-weight:700;color:var(--navy);font-family:inherit" title="Rename category">';
     h += '<button class="btn btn-sm btn-out" style="color:var(--coral);border-color:var(--coral);padding:2px 8px;font-size:.7rem" onclick="deletePiCategory('+ci+')" title="Delete category">×</button>';
     h += '</div>';
-    h += '<div style="font-size:.7rem;color:var(--mut);text-transform:uppercase;letter-spacing:.05em;font-weight:600;margin-bottom:6px">'+catTotal+' PIs &middot; '+F(catNASF)+' SF</div>';
-    // v0.5.44: theme-share slider. Each card is INDEPENDENT — dragging or
-    // typing only scales PI counts in THIS category. Other cards stay put,
-    // and the totals across the 4 cards no longer have to sum to 100%
-    // (per user feedback 2026-05-13: cross-card scaling was making the
-    // sliders snap to the nearest integer-PI configuration across all four,
-    // so an intended 20% would land on 26% or 15%).
+    h += '<div style="font-size:.7rem;color:var(--mut);text-transform:uppercase;letter-spacing:.05em;font-weight:600;margin-bottom:6px">'+catTotal+' PIs &middot; '+F(catNASF)+' SF &middot; '+actualPct.toFixed(1)+'% actual</div>';
     var _catPctStep = 0.5;
     h += '<div style="margin-bottom:8px;padding-bottom:8px;border-bottom:1px dashed var(--bdr)">';
-    h += '<label class="sl" style="font-size:.72rem;color:var(--clrResearch);display:flex;justify-content:space-between;align-items:baseline;margin-bottom:1px;gap:6px">';
+    h += '<label class="sl" style="font-size:.72rem;color:'+_shareColor+';display:flex;justify-content:space-between;align-items:baseline;margin-bottom:1px;gap:6px" title="Target share of research SF for this theme. Sum across all themes should be 100% (red >100%, green =100%, yellow <100%).">';
     h += '<span style="font-weight:700">Theme share of research</span>';
     h += '<span style="display:flex;align-items:baseline;gap:4px">';
-    h += '<input type="number" min="0" max="100" step="0.1" value="'+catPct.toFixed(1)+'" onchange="setCategoryShare('+ci+',this.value)" title="Type a target %" style="width:54px;border:1px solid var(--bdr);border-radius:4px;padding:2px 4px;font-family:\'IBM Plex Mono\',monospace;font-weight:700;font-size:.78rem;text-align:right;color:var(--clrResearch)">';
+    h += '<input type="number" min="0" max="100" step="0.1" value="'+_share.toFixed(1)+'" onchange="setCategoryShare('+ci+',this.value)" title="Type a target %" style="width:54px;border:1px solid var(--bdr);border-radius:4px;padding:2px 4px;font-family:\'IBM Plex Mono\',monospace;font-weight:700;font-size:.78rem;text-align:right;color:'+_shareColor+'">';
     h += '<span style="font-family:\'IBM Plex Mono\',monospace;font-weight:700;color:var(--mut);font-size:.78rem">%</span>';
     h += '</span>';
     h += '</label>';
-    h += '<input type="range" min="0" max="100" step="'+_catPctStep+'" value="'+catPct.toFixed(1)+'" oninput="setCategoryShare('+ci+',this.value)" style="width:100%;accent-color:var(--clrResearch)">';
+    h += '<input type="range" min="0" max="100" step="'+_catPctStep+'" value="'+_share.toFixed(1)+'" oninput="setCategoryShare('+ci+',this.value)" style="width:100%;accent-color:'+_shareColor+'">';
     h += '</div>';
     S.types.forEach(function(t){
       var v = +(cat.mix[t.id] || 0);
@@ -175180,11 +175187,20 @@ function renderMix(d) {
   // Roll-up footer
   var assignedPIs = 0;
   S.piCategories.forEach(function(c){ S.types.forEach(function(t){ assignedPIs += +(c.mix[t.id]||0); }); });
+  // v0.5.45: surface the sum of the four independent theme-share targets
+  // so the user can see why the per-card sliders went red/green/yellow.
   h += '<div style="padding:10px 0 0;margin-top:10px;border-top:2px solid var(--navy);display:flex;justify-content:space-between;align-items:baseline">';
+  h += '<span style="font-size:.95rem;font-weight:700;color:'+_shareColor+'">Sum of theme shares</span>';
+  h += '<span style="font-family:\'IBM Plex Mono\',monospace;font-size:1.15rem;font-weight:700;color:'+_shareColor+'" title="Red >100%, green =100%, yellow <100%">'+_targetSum.toFixed(1)+'% / 100.0%</span>';
+  h += '</div>';
+  h += '<div style="padding:6px 0 0;display:flex;justify-content:space-between;align-items:baseline">';
   h += '<span style="font-size:1rem;font-weight:900;color:var(--navy)">Assigned PIs (across themes)</span>';
   h += '<span style="font-family:\'IBM Plex Mono\',monospace;font-size:1.3rem;font-weight:700;color:'+(assignedPIs===S.totalPIs?'var(--navy)':'var(--coral)')+'">'+assignedPIs+' / '+S.totalPIs+'</span>';
   h += '</div>';
-  h += '<div style="margin-top:6px"><label class="sl" style="font-size:.78rem">Total PIs (cap)</label><div class="sl-row"><input type="range" min="10" max="60" step="1" value="'+S.totalPIs+'" oninput="S.totalPIs=parseInt(this.value);render()"><div class="sl-val">'+S.totalPIs+'</div></div></div>';
+  // v0.5.46: dragging the cap now PROPORTIONALLY scales every per-theme /
+  // per-typology PI count via setTotalPIs() so the user can resize the
+  // whole project while keeping the meeting-decided percentages intact.
+  h += '<div style="margin-top:6px"><label class="sl" style="font-size:.78rem">Total PIs (cap)</label><div class="sl-row"><input type="range" min="10" max="100" step="1" value="'+S.totalPIs+'" oninput="setTotalPIs(this.value)"><div class="sl-val">'+S.totalPIs+'</div></div></div>';
   h += '</div>';
   return h;
 }
@@ -175195,29 +175211,81 @@ function renderMix(d) {
 // `setPiCategoryMix` below.
 function setPIs(i, val) { S.types[i].pis = parseInt(val); render(); }
 
-// v0.5.40: thematic PI categories. Default seed mirrors the current PI
-// distribution split as evenly as possible across the four research themes.
+// v0.5.45: thematic PI categories. Default seed mirrors the strategic
+// plan distributions decided at the 2026-05-13 meeting:
+//   Remote Environments         — 30% of research SF
+//   Optimize Human Health Span  — 30%
+//   Climate Resilient Comms.    — 20%
+//   Embodied AI                 — 20%
+// Each default carries a targetPct (theme share of research SF — now stored
+// rather than derived, so the four sliders are fully independent) and a
+// seed PI mix that approximates the within-theme typology distribution
+// from the same meeting against a 50-PI cap.
+//   Embodied AI:  Higher 0%, Lower 20%, Wet Chem 30%, Wet Bio 0%, Dry (Robotics) 50%
+//   Climate:      Higher 10%, Lower/Chem/Bio 70% combined (split evenly), Dry (Computational) 20%
+//   Health Span:  Higher 20%, Lower/Chem/Bio 60% combined (split evenly), Dry (Robotics) 20%
+//   Remote:       Higher 30%, Lower 30%, Wet Chem 30%, Wet Bio 0%, Dry (Robotics) 10%
+// "Dry" maps to drywkshp except for Climate Resilient where it maps to comp.
 var _PI_DEFAULT_CATEGORIES = [
-  { id: 'remote_environments',     name: 'Remote Environments' },
-  { id: 'optimize_human_health',   name: 'Optimize Human Health' },
-  { id: 'climate_resilient',       name: 'Climate Resilient Communities' },
-  { id: 'embodied_ai',             name: 'Embodied AI' }
+  { id: 'remote_environments',     name: 'Remote Environments',           targetPct: 30,
+    mix: { optnano:5, optics:4, wetchem:5, wetbio:0, drywkshp:1, comp:0 } },
+  { id: 'optimize_human_health',   name: 'Optimize Human Health Span',    targetPct: 30,
+    mix: { optnano:3, optics:3, wetchem:3, wetbio:3, drywkshp:3, comp:0 } },
+  { id: 'climate_resilient',       name: 'Climate Resilient Communities', targetPct: 20,
+    mix: { optnano:1, optics:2, wetchem:2, wetbio:3, drywkshp:0, comp:2 } },
+  { id: 'embodied_ai',             name: 'Embodied AI',                   targetPct: 20,
+    mix: { optnano:0, optics:2, wetchem:3, wetbio:0, drywkshp:5, comp:0 } }
 ];
 
+// v0.5.45: one-time migration applied to existing saved state. Renames
+// "Optimize Human Health" → "Optimize Human Health Span" and overwrites the
+// targetPct + within-theme mix of any default-named category with the
+// strategic-plan values above. Gated on S._strategicPlanV1 so it runs once.
+var _PI_STRATEGIC_PLAN_BY_OLD_NAME = {
+  'Remote Environments':           _PI_DEFAULT_CATEGORIES[0],
+  'Optimize Human Health':         _PI_DEFAULT_CATEGORIES[1],
+  'Optimize Human Health Span':    _PI_DEFAULT_CATEGORIES[1],
+  'Climate Resilient Communities': _PI_DEFAULT_CATEGORIES[2],
+  'Embodied AI':                   _PI_DEFAULT_CATEGORIES[3]
+};
+
 function _ensurePiCategories() {
-  if (Array.isArray(S.piCategories) && S.piCategories.length > 0) return;
-  // Seed: split each typology's existing pis evenly across the 4 default
-  // themes (any leftover going to the first theme so the totals match).
-  S.piCategories = _PI_DEFAULT_CATEGORIES.map(function(c){ return { id:c.id, name:c.name, mix:{} }; });
-  (S.types || []).forEach(function(t){
-    var n = S.piCategories.length;
-    var per = Math.floor((t.pis || 0) / n);
-    var rem = (t.pis || 0) - per * n;
-    S.piCategories.forEach(function(cat, ci){
-      cat.mix[t.id] = per + (ci < rem ? 1 : 0);
+  // Fresh seed: no categories saved yet → use strategic-plan defaults.
+  if (!Array.isArray(S.piCategories) || S.piCategories.length === 0) {
+    S.piCategories = _PI_DEFAULT_CATEGORIES.map(function(c){
+      var mix = {};
+      (S.types || []).forEach(function(t){ mix[t.id] = +(c.mix[t.id] || 0); });
+      return { id: c.id, name: c.name, targetPct: c.targetPct, mix: mix };
     });
+    _syncTypePIsFromCategories();
+    // v0.5.46: defaults sum to 50 PIs. If the user's configured cap is
+    // different, scale the seed so the initial render respects it.
+    var seedTotal = 0;
+    S.piCategories.forEach(function(cat){
+      (S.types || []).forEach(function(t){ seedTotal += +(cat.mix[t.id] || 0); });
+    });
+    if (S.totalPIs && seedTotal > 0 && S.totalPIs !== seedTotal) {
+      _scalePiCategoriesTo(S.totalPIs);
+    }
+    S._strategicPlanV1 = true;
+    return;
+  }
+  // One-time migration: apply the strategic plan to default-named categories.
+  if (!S._strategicPlanV1) {
+    S.piCategories.forEach(function(cat){
+      var sp = _PI_STRATEGIC_PLAN_BY_OLD_NAME[cat.name];
+      if (!sp) return;
+      cat.name = sp.name;
+      cat.targetPct = sp.targetPct;
+      (S.types || []).forEach(function(t){ cat.mix[t.id] = +(sp.mix[t.id] || 0); });
+    });
+    _syncTypePIsFromCategories();
+    S._strategicPlanV1 = true;
+  }
+  // Backfill targetPct for any category the user added separately.
+  S.piCategories.forEach(function(cat){
+    if (typeof cat.targetPct !== 'number') cat.targetPct = 0;
   });
-  _syncTypePIsFromCategories();
 }
 
 function _syncTypePIsFromCategories() {
@@ -175231,6 +175299,92 @@ function _syncTypePIsFromCategories() {
   });
 }
 
+// v0.5.46: Rescale every cat.mix PI count so the project totals newTotal,
+// dividing the budget by the four stored theme targets (cat.targetPct) and
+// then by each theme's current within-theme PI proportions. Used by the
+// bottom "Total PIs (cap)" slider so the user can drag the cap and have
+// the per-typology PI counts move with it instead of staying flat. Each
+// scaling re-derives from the stored targets + current proportions in one
+// shot (rather than chaining previous rounded counts), so repeated drags
+// don't accumulate rounding drift.
+//
+// Allocation is two-stage with largest-remainder rounding at each stage:
+//   1. Theme PI budgets: newTotal split by (cat.targetPct / sum of targets).
+//      If all targets are zero, fall back to an even split.
+//   2. Within each theme: theme budget split by (cat.mix[t.id] / cat sum).
+//      If a theme is empty (sum=0) but the budget is non-zero, fall back
+//      to the within-theme default mix from _PI_DEFAULT_CATEGORIES (so a
+//      previously-blanked theme can come back from the cap going up).
+function _allocByLargestRemainder(total, weights) {
+  // weights: array of non-negative numbers. Returns integer array summing to total.
+  var n = weights.length;
+  var out = new Array(n).fill(0);
+  if (total <= 0 || n === 0) return out;
+  var sum = 0;
+  for (var i = 0; i < n; i++) sum += weights[i];
+  if (sum <= 0) {
+    var per = Math.floor(total / n);
+    var rem = total - per * n;
+    for (i = 0; i < n; i++) out[i] = per + (i < rem ? 1 : 0);
+    return out;
+  }
+  var rem2 = total;
+  var fracs = [];
+  for (i = 0; i < n; i++) {
+    var exact = total * (weights[i] / sum);
+    out[i] = Math.floor(exact);
+    rem2 -= out[i];
+    fracs.push({ i: i, frac: exact - out[i], hasWeight: weights[i] > 0 });
+  }
+  // Distribute remainder by largest fractional part, preferring cells with weight.
+  fracs.sort(function(a, b){
+    if (a.hasWeight !== b.hasWeight) return a.hasWeight ? -1 : 1;
+    return b.frac - a.frac;
+  });
+  for (var k = 0; rem2 > 0 && k < fracs.length; k++) { out[fracs[k].i]++; rem2--; }
+  return out;
+}
+
+function _scalePiCategoriesTo(newTotal) {
+  newTotal = Math.max(0, parseInt(newTotal) || 0);
+  if (!Array.isArray(S.piCategories) || S.piCategories.length === 0) return;
+  if (newTotal === 0) {
+    S.piCategories.forEach(function(cat){
+      (S.types || []).forEach(function(t){ cat.mix[t.id] = 0; });
+    });
+    _syncTypePIsFromCategories();
+    return;
+  }
+  // Stage 1: theme PI budgets from cat.targetPct.
+  var themeWeights = S.piCategories.map(function(c){ return Math.max(0, +(c.targetPct || 0)); });
+  var themeBudgets = _allocByLargestRemainder(newTotal, themeWeights);
+  // Stage 2: within each theme, allocate by current mix proportions.
+  S.piCategories.forEach(function(cat, ci){
+    var budget = themeBudgets[ci];
+    var typeIds = (S.types || []).map(function(t){ return t.id; });
+    var weights = typeIds.map(function(tid){ return Math.max(0, +(cat.mix[tid] || 0)); });
+    var sumW = weights.reduce(function(a,b){ return a + b; }, 0);
+    // If the theme is empty but is getting a budget, fall back to the
+    // strategic-plan default mix so it doesn't stay stuck at zero.
+    if (sumW === 0 && budget > 0) {
+      var def = null;
+      for (var i = 0; i < _PI_DEFAULT_CATEGORIES.length; i++) {
+        if (_PI_DEFAULT_CATEGORIES[i].id === cat.id) { def = _PI_DEFAULT_CATEGORIES[i]; break; }
+      }
+      if (def) weights = typeIds.map(function(tid){ return Math.max(0, +(def.mix[tid] || 0)); });
+    }
+    var alloc = _allocByLargestRemainder(budget, weights);
+    typeIds.forEach(function(tid, ti){ cat.mix[tid] = alloc[ti]; });
+  });
+  _syncTypePIsFromCategories();
+}
+
+function setTotalPIs(val) {
+  S.totalPIs = Math.max(0, parseInt(val) || 0);
+  _scalePiCategoriesTo(S.totalPIs);
+  render();
+}
+
 function setPiCategoryMix(catIdx, typeId, val) {
   var v = Math.max(0, parseInt(val) || 0);
   if (!S.piCategories[catIdx]) return;
@@ -175239,20 +175393,23 @@ function setPiCategoryMix(catIdx, typeId, val) {
   render();
 }
 
-// v0.5.44: set a category's target share of total research NASF.
-// Per user feedback 2026-05-13: the 100% cap now applies PER CARD only —
-// the other three cards are left untouched. Total research NASF will shift
-// as this card grows/shrinks, which is fine: the typed % represents this
-// card's share of the NEW total. Integer PI rounding still creates some
-// snap, but only this card's PI count is rounded (instead of all four),
-// so the achievable percentages are much denser.
+// v0.5.45: set a category's target share of research SF. The target is
+// stored DIRECTLY on the category (cat.targetPct), so the slider is
+// independent of the other three cards — moving this slider never updates
+// any other card's slider, value, or PI count. We then scale ONLY this
+// card's PI counts so its realized NASF approximates the new target
+// against the unchanged NASF of the other cards. The sum of the four
+// targets need not equal 100% — the sum drives the slider color (red over,
+// green at, yellow under) in the renderer.
 //
 // Math: solve  targetPct = newThisNASF / (otherNASF + newThisNASF)
 //   →  newThisNASF = targetPct * otherNASF / (1 - targetPct)
 // Then scale this card's PI counts so its NASF ≈ newThisNASF.
 function setCategoryShare(catIdx, targetPctStr) {
   if (!S.piCategories[catIdx]) return;
-  var targetPct = Math.max(0, Math.min(100, parseFloat(targetPctStr) || 0)) / 100;
+  var targetPctRaw = Math.max(0, Math.min(100, parseFloat(targetPctStr) || 0));
+  S.piCategories[catIdx].targetPct = targetPctRaw;
+  var targetPct = targetPctRaw / 100;
   // Per-type group NASF (single source of truth).
   var gn = {};
   (S.types || []).forEach(function(t){ gn[t.id] = calcGroupNASF(t); });
@@ -175321,7 +175478,7 @@ function renamePiCategory(catIdx, val) {
 function addPiCategory() {
   _ensurePiCategories();
   var n = S.piCategories.length + 1;
-  var newCat = { id: 'theme_' + Date.now(), name: 'New Theme ' + n, mix: {} };
+  var newCat = { id: 'theme_' + Date.now(), name: 'New Theme ' + n, targetPct: 0, mix: {} };
   (S.types || []).forEach(function(t){ newCat.mix[t.id] = 0; });
   S.piCategories.push(newCat);
   render();
