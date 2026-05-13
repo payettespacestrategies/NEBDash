@@ -175145,14 +175145,20 @@ function renderMix(d) {
     h += '<button class="btn btn-sm btn-out" style="color:var(--coral);border-color:var(--coral);padding:2px 8px;font-size:.7rem" onclick="deletePiCategory('+ci+')" title="Delete category">×</button>';
     h += '</div>';
     h += '<div style="font-size:.7rem;color:var(--mut);text-transform:uppercase;letter-spacing:.05em;font-weight:600;margin-bottom:6px">'+catTotal+' PIs &middot; '+F(catNASF)+' SF</div>';
-    // v0.5.42: theme-share slider. Dragging scales PI counts in this category
-    // and inversely scales the other categories so total research NASF stays
-    // roughly constant (otherwise the thumb would drift as denom moves).
+    // v0.5.44: theme-share slider. Each card is INDEPENDENT — dragging or
+    // typing only scales PI counts in THIS category. Other cards stay put,
+    // and the totals across the 4 cards no longer have to sum to 100%
+    // (per user feedback 2026-05-13: cross-card scaling was making the
+    // sliders snap to the nearest integer-PI configuration across all four,
+    // so an intended 20% would land on 26% or 15%).
     var _catPctStep = 0.5;
     h += '<div style="margin-bottom:8px;padding-bottom:8px;border-bottom:1px dashed var(--bdr)">';
-    h += '<label class="sl" style="font-size:.72rem;color:var(--clrResearch);display:flex;justify-content:space-between;align-items:baseline;margin-bottom:1px">';
+    h += '<label class="sl" style="font-size:.72rem;color:var(--clrResearch);display:flex;justify-content:space-between;align-items:baseline;margin-bottom:1px;gap:6px">';
     h += '<span style="font-weight:700">Theme share of research</span>';
-    h += '<span style="font-family:\'IBM Plex Mono\',monospace;font-weight:700">'+catPct.toFixed(1)+'%</span>';
+    h += '<span style="display:flex;align-items:baseline;gap:4px">';
+    h += '<input type="number" min="0" max="100" step="0.1" value="'+catPct.toFixed(1)+'" onchange="setCategoryShare('+ci+',this.value)" title="Type a target %" style="width:54px;border:1px solid var(--bdr);border-radius:4px;padding:2px 4px;font-family:\'IBM Plex Mono\',monospace;font-weight:700;font-size:.78rem;text-align:right;color:var(--clrResearch)">';
+    h += '<span style="font-family:\'IBM Plex Mono\',monospace;font-weight:700;color:var(--mut);font-size:.78rem">%</span>';
+    h += '</span>';
     h += '</label>';
     h += '<input type="range" min="0" max="100" step="'+_catPctStep+'" value="'+catPct.toFixed(1)+'" oninput="setCategoryShare('+ci+',this.value)" style="width:100%;accent-color:var(--clrResearch)">';
     h += '</div>';
@@ -175233,11 +175239,17 @@ function setPiCategoryMix(catIdx, typeId, val) {
   render();
 }
 
-// v0.5.42: set a category's target share of total research NASF.
-// Scales PI counts in this category up/down, and proportionally scales
-// the other categories inversely so total research NASF stays ~constant.
-// Without the inverse scaling the slider would visually drift as the
-// denominator (total research NASF) changes with each move.
+// v0.5.44: set a category's target share of total research NASF.
+// Per user feedback 2026-05-13: the 100% cap now applies PER CARD only —
+// the other three cards are left untouched. Total research NASF will shift
+// as this card grows/shrinks, which is fine: the typed % represents this
+// card's share of the NEW total. Integer PI rounding still creates some
+// snap, but only this card's PI count is rounded (instead of all four),
+// so the achievable percentages are much denser.
+//
+// Math: solve  targetPct = newThisNASF / (otherNASF + newThisNASF)
+//   →  newThisNASF = targetPct * otherNASF / (1 - targetPct)
+// Then scale this card's PI counts so its NASF ≈ newThisNASF.
 function setCategoryShare(catIdx, targetPctStr) {
   if (!S.piCategories[catIdx]) return;
   var targetPct = Math.max(0, Math.min(100, parseFloat(targetPctStr) || 0)) / 100;
@@ -175250,38 +175262,37 @@ function setCategoryShare(catIdx, targetPctStr) {
     (S.types || []).forEach(function(t){ n += (+(cat.mix[t.id] || 0)) * (gn[t.id] || 0); });
     return n;
   });
-  var totalNASF = catNASFs.reduce(function(a,b){ return a + b; }, 0);
-  if (totalNASF <= 0) {
-    // Nothing exists anywhere yet — seed this cat with 1 PI per typology
-    // that has a non-zero group NASF, so the slider becomes responsive.
-    if (targetPct > 0) {
-      (S.types || []).forEach(function(t){
-        if ((gn[t.id] || 0) > 0) S.piCategories[catIdx].mix[t.id] = 1;
-      });
+  var oldThisNASF = catNASFs[catIdx];
+  var otherNASF = catNASFs.reduce(function(a,b){ return a + b; }, 0) - oldThisNASF;
+  // What NASF does THIS card need so it ends up at targetPct of the new total?
+  var newThisNASF;
+  if (targetPct <= 0) {
+    newThisNASF = 0;
+  } else if (targetPct >= 0.999) {
+    // Asking for 100% (or ~100%) means the other cards become negligible
+    // relative to this one. We don't touch the others, so we just grow this
+    // card by a large factor — capped at 100× its current size to avoid
+    // runaway numbers.
+    newThisNASF = Math.max(oldThisNASF, otherNASF) * 100;
+  } else {
+    newThisNASF = (targetPct * otherNASF) / (1 - targetPct);
+    // If there are no other cards with PIs yet, otherNASF=0 and the formula
+    // collapses to 0. Fall back to growing this card on its own.
+    if (otherNASF <= 0) {
+      newThisNASF = oldThisNASF > 0 ? oldThisNASF : 1;
     }
-    _syncTypePIsFromCategories();
-    render();
-    return;
   }
-  var targetCatNASF = totalNASF * targetPct;
-  var otherOldNASF = totalNASF - catNASFs[catIdx];
-  var otherNewNASF = Math.max(0, totalNASF - targetCatNASF);
-  // Scale factor for OTHER cats so total stays constant.
-  var otherScale = otherOldNASF > 0 ? (otherNewNASF / otherOldNASF) : 0;
-  if (catNASFs[catIdx] > 0) {
-    // Normal path: scale this cat's PI counts by thisScale.
-    var thisScale = targetCatNASF / catNASFs[catIdx];
-    S.piCategories.forEach(function(cat, ci){
-      var s = (ci === catIdx) ? thisScale : otherScale;
-      (S.types || []).forEach(function(t){
-        var current = +(cat.mix[t.id] || 0);
-        cat.mix[t.id] = Math.max(0, Math.round(current * s));
-      });
+  if (oldThisNASF > 0) {
+    // Normal path: scale only THIS card's PI counts.
+    var thisScale = newThisNASF / oldThisNASF;
+    (S.types || []).forEach(function(t){
+      var current = +(S.piCategories[catIdx].mix[t.id] || 0);
+      S.piCategories[catIdx].mix[t.id] = Math.max(0, Math.round(current * thisScale));
     });
   } else if (targetPct > 0) {
-    // Cat was empty — seed it proportionally across typologies that
-    // already exist somewhere in the program (so we honor the current
-    // typology mix). Falls back to even distribution if nothing else has PIs.
+    // Card was empty — seed it from the typology distribution of the other
+    // cards so we honor the project's overall mix. If nothing exists yet,
+    // fall back to one PI per typology that has a non-zero group NASF.
     var globalMix = {};
     var globalTotal = 0;
     (S.types || []).forEach(function(t){
@@ -175294,16 +175305,8 @@ function setCategoryShare(catIdx, targetPctStr) {
     if (typesWithSpace.length === 0) { render(); return; }
     typesWithSpace.forEach(function(t){
       var share = globalTotal > 0 ? (globalMix[t.id] / globalTotal) : (1 / typesWithSpace.length);
-      var seedNASF = targetCatNASF * share;
+      var seedNASF = newThisNASF * share;
       S.piCategories[catIdx].mix[t.id] = Math.max(share > 0 ? 1 : 0, Math.round(seedNASF / gn[t.id]));
-    });
-    // Scale other cats inversely.
-    S.piCategories.forEach(function(cat, ci){
-      if (ci === catIdx) return;
-      (S.types || []).forEach(function(t){
-        var current = +(cat.mix[t.id] || 0);
-        cat.mix[t.id] = Math.max(0, Math.round(current * otherScale));
-      });
     });
   }
   _syncTypePIsFromCategories();
@@ -180514,16 +180517,31 @@ function renderAcademicSpaceV5(d) {
     var qty   = +(it.qty || (it.nasf > 0 ? 1 : 0));
     var nasfE = +(it.nasf_each || it.nasf || 0);
     var total = qty * nasfE;
-    var inUpper = _isUpperFloor(it.floor);
+    // v0.5.44: classify floor token —
+    //   'upper'/'all'  → repeats on every research floor (×researchFloors)
+    //   '2','3','4',…  → single instance on that specific upper floor (×1)
+    //   anything else  → ground floor
+    var _floorTok = String(it.floor == null ? '' : it.floor).toLowerCase();
+    var _isRepeatedUpper = _isUpperFloor(it.floor); // 'upper' or 'all'
+    var _numFloor = parseInt(_floorTok, 10);
+    var _isSpecificUpper = !_isRepeatedUpper && !isNaN(_numFloor) && _numFloor >= 2;
+    var inUpper = _isRepeatedUpper || _isSpecificUpper;
     return {
       qty: qty,
       nasf_each: nasfE,
       seats: +(it.seats || 0),
       occ_each: +(it.occupancy_each || 0),
       gf: inUpper ? 0 : total,
-      upPer: inUpper ? total : 0,
-      upTotal: inUpper ? total * researchFloors : 0
+      upPer: _isRepeatedUpper ? total : (_isSpecificUpper ? total : 0),
+      upTotal: _isRepeatedUpper ? total * researchFloors : (_isSpecificUpper ? total : 0)
     };
+  }
+  // v0.5.44: parallel helper for the people-count math below.
+  function _itemFloorMult(f) {
+    if (_isUpperFloor(f)) return researchFloors;
+    var n = parseInt(String(f == null ? '' : f).toLowerCase(), 10);
+    if (!isNaN(n) && n >= 2) return 1;       // specific upper floor — one instance
+    return 1;                                 // ground / unspecified
   }
 
   // Building-wide population for SF/Person column (collab + office only)
@@ -180573,13 +180591,13 @@ function renderAcademicSpaceV5(d) {
       if (t.seats > 0) {
         perCell = (rowTotal / t.seats).toFixed(1) + ' <span style="font-size:.7rem;color:#6B6B6B">SF/seat</span>';
       } else if (t.occ_each > 0) {
-        var ppl = t.qty * t.occ_each * (_isUpperFloor(it.floor) ? researchFloors : 1);
+        var ppl = t.qty * t.occ_each * _itemFloorMult(it.floor);
         perCell = ppl > 0 ? (rowTotal / ppl).toFixed(0) + ' <span style="font-size:.7rem;color:#6B6B6B">SF/person</span>' : perCell;
       } else if (grp.key === 'collaboration' || grp.key === 'community') {
         perCell = (rowTotal / pop).toFixed(1) + ' <span style="font-size:.7rem;color:#6B6B6B">SF/FTE</span>';
       }
       var seatOcc = t.seats > 0 ? (t.seats.toLocaleString()+' seats')
-                  : t.occ_each > 0 ? ((t.qty * t.occ_each * (_isUpperFloor(it.floor)?researchFloors:1)).toLocaleString()+' people')
+                  : t.occ_each > 0 ? ((t.qty * t.occ_each * _itemFloorMult(it.floor)).toLocaleString()+' people')
                   : '—';
       h += '<tr style="border-bottom:1px solid #E0DBD5">';
       // Indent item names so the hierarchy reads under the category band
