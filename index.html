@@ -8211,7 +8211,16 @@ function _skillBuildPIFloorRows(d) {
     bPIs  += pis;
     bNASF += nasf;
   });
-  var basementRow = { label:'Basement', segs: bSegs, totalPIs: bPIs, totalNASF: bNASF };
+  // v0.5.71: include Shared Lab Facilities NSF in the basement bar so it
+  // matches the Thematic Distribution stacking (pink "Shar" segment).
+  var bSharedLab = (d && typeof d.basementCoreNASF === 'number') ? d.basementCoreNASF : 0;
+  var basementRow = {
+    label:'Basement',
+    segs: bSegs,
+    totalPIs: bPIs,
+    totalNASF: bNASF + bSharedLab,
+    sharedLab: bSharedLab
+  };
 
   // Determine the largest research-NASF total across all floors → that
   // floor's bar gets 100% width; others scale proportionally.
@@ -8266,6 +8275,19 @@ function _skillBuildPIFloorRows(d) {
         h += '</div>';
       }
     });
+    // v0.5.71: Shared Lab Facilities segment — basement only, matches the
+    // Thematic Distribution pink "Shar X,XXX" treatment.
+    if (r.sharedLab && r.sharedLab > 0) {
+      var sPct = r.totalNASF > 0 ? (r.sharedLab / r.totalNASF * 100) : 0;
+      if (sPct > 0.4) {
+        var sSF50 = _skillRound50(r.sharedLab);
+        h += '<div style="width:'+sPct.toFixed(2)+'%;background:var(--clrCore);color:#fff;font-size:.7rem;font-weight:700" title="Shared Lab Facilities: '+F(sSF50)+' NSF">';
+        if (sPct > 4) {
+          h += '<span>Shar '+F(sSF50)+'</span>';
+        }
+        h += '</div>';
+      }
+    }
     h += '</div></div>';
     h += '<div style="font-family:\'IBM Plex Mono\',monospace;font-size:.75rem;font-weight:600;min-width:155px;text-align:right;line-height:1.45">';
     // v0.5.51: '# PIs' format + NSF rounded to nearest 50 (matches the
@@ -8318,7 +8340,7 @@ function _skillInjectPIFloorChart(html, d) {
     }).join('');
 
   var card = '<div class="card"><div class="card-title">PIs by Floor</div>';
-  card += '<div class="card-sub">Bar width = floor research NSF (relative to the floor with the most research NSF). Colored segments fill the bar 100% — each is one PI typology\'s share (lab + support + desk + offices for upper floors; lab + support only for basement). Hover a segment to see the PI count + SF.</div>';
+  card += '<div class="card-sub">Bar width = floor research NSF + Shared Lab Facilities (relative to the floor with the most). Colored segments fill the bar 100% — one per PI typology (lab + support + desk + offices for upper floors; lab + support only for basement). The basement bar also includes a pink <strong>Shared Lab Facilities</strong> segment that matches the Shared colour in Building Section — Program Distribution. Hover a segment to see the PI count + SF.</div>';
   if (legendChips) {
     card += '<div class="legend" style="margin-top:8px">' + legendChips + '</div>';
   }
