@@ -7464,7 +7464,18 @@ function _skillBuildThematicFloorRows(d) {
   }
   var themeIds = themes.map(function(th){ return th.id; });
 
+  // v0.5.54: each PI is wholly identified with a (theme, typology) per the
+  // PI Mix tab — labs are NOT spread across themes. So for each typology
+  // on a floor, assign PIs to themes via largest-remainder; then each
+  // theme's NSF on that floor is the SUM over typologies of
+  //   integer_PIs_in_theme × per-PI NSF of that typology.
+  // PI count and NSF are now derived from the same integer attribution
+  // (no more fractional smearing).
   var floorThemePIs = {};
+  function perPILabUpper(t)    { return calcGroupOpenLab(t) + calcGroupLabSupport(t) + calcGroupDesk(t) + t.facultyOffice + t.flexOffice; }
+  function perPIDeskOffice(t)  { return calcGroupDesk(t) + t.facultyOffice + t.flexOffice; }
+  function perPILabBasement(t) { return calcGroupOpenLab(t) + calcGroupLabSupport(t); }
+
   for (var f = 2; f <= topFloor; f++) {
     var fk = String(f);
     var floorPIs = alloc[fk] || {};
@@ -7474,34 +7485,31 @@ function _skillBuildThematicFloorRows(d) {
     S.types.forEach(function(t){
       var n = +(floorPIs[t.id] || 0);
       if (n <= 0) return;
-      var labNASF = (calcGroupOpenLab(t) + calcGroupLabSupport(t) + calcGroupDesk(t)) * n;
-      var offNASF = (t.facultyOffice + t.flexOffice) * n;
-      var pickedNASF = labNASF + offNASF;
       var w = typeWeights[t.id].weights;
-      themes.forEach(function(th){
-        perTheme[th.id] += pickedNASF * (w[th.id] || 0);
-      });
-      // Integer PI attribution via largest-remainder per typology
       var pisByTheme = largestRemainderAlloc(n, w, themeIds);
-      themeIds.forEach(function(id){ perThemePIs[id] += pisByTheme[id]; });
+      var perPI = perPILabUpper(t);
+      themeIds.forEach(function(id){
+        perThemePIs[id] += pisByTheme[id];
+        perTheme[id]    += pisByTheme[id] * perPI;
+      });
     });
     floorTheme[fk] = perTheme;
     floorThemePIs[fk] = perThemePIs;
 
-    // Add basement-displaced desk + office on Floor 2 (per v0.5.49 routing)
+    // Floor 2 picks up basement PIs' desk + office (per v0.5.49 routing).
+    // Same integer-attribution rule: the PI is whole and themed; its desk
+    // + office NSF on F2 lives entirely in that PI's theme.
     if (f === 2) {
       S.types.forEach(function(t){
         var bp = (S.basementAllocation && +S.basementAllocation[t.id]) || 0;
         if (bp <= 0) return;
-        var bsmtDeskOff = (calcGroupDesk(t) + t.facultyOffice + t.flexOffice) * bp;
         var w = typeWeights[t.id].weights;
-        themes.forEach(function(th){
-          floorTheme[fk][th.id] += bsmtDeskOff * (w[th.id] || 0);
-        });
-        // PI-count attribution for basement PIs whose desk + office land
-        // on F2: assign those PIs (integer) across themes the same way.
         var bpByTheme = largestRemainderAlloc(bp, w, themeIds);
-        themeIds.forEach(function(id){ floorThemePIs[fk][id] += bpByTheme[id]; });
+        var perPI = perPIDeskOffice(t);
+        themeIds.forEach(function(id){
+          floorThemePIs[fk][id] += bpByTheme[id];
+          floorTheme[fk][id]    += bpByTheme[id] * perPI;
+        });
       });
     }
 
@@ -7512,17 +7520,18 @@ function _skillBuildThematicFloorRows(d) {
     floorOther[fk] = corePerFloor + fComm + fEvent;
   }
 
-  // Basement: open lab + lab support for basement-located PIs, themed;
-  // basement shared facilities + any basement-located ground program → non-theme.
-  // (desk + office for basement PIs are routed to Floor 2 in v0.5.49.)
+  // Basement: open lab + lab support for basement-located PIs, themed
+  // by integer PI attribution (each PI is whole and themed; desk + office
+  // for basement PIs are routed to F2 by v0.5.49 — handled above).
   var bsmtTheme = {};
   themes.forEach(function(th){ bsmtTheme[th.id] = 0; });
   S.types.forEach(function(t){
     var n = (S.basementAllocation && +S.basementAllocation[t.id]) || 0;
     if (n <= 0) return;
-    var nasf = (calcGroupOpenLab(t) + calcGroupLabSupport(t)) * n;
     var w = typeWeights[t.id].weights;
-    themes.forEach(function(th){ bsmtTheme[th.id] += nasf * (w[th.id] || 0); });
+    var pisByTheme = largestRemainderAlloc(n, w, themeIds);
+    var perPI = perPILabBasement(t);
+    themeIds.forEach(function(id){ bsmtTheme[id] += pisByTheme[id] * perPI; });
   });
   var bsmtOther = (d && d.basementCoreNASF) || 0;
   // Also include any basement-floor ground program items (e.g. loading dock,
