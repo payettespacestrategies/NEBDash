@@ -7436,9 +7436,34 @@ function _skillBuildThematicFloorRows(d) {
     var coreSplitResearch = (S.coreFloorSplit && S.coreFloorSplit.research) || 0;
     corePerFloor = researchFloors > 0 ? d.coreNASF * coreSplitResearch / researchFloors : 0;
   }
-  // v0.5.52: track per-theme PI count too (fractional — sum of typology
-  // PI counts weighted by their theme share). Used as the segment data
-  // label so each band shows "<PIs> / <NSF>" consistent with PIs by Floor.
+  // v0.5.53: per-theme PI count is now an INTEGER, computed using the
+  // largest-remainder method per typology so the count guarantees:
+  //   • Σ themes = the typology's PI count on this floor
+  //   • each typology's PIs are attributed across themes in proportion
+  //     to its piCategories mix (fractional shares snap to nearest integer
+  //     with leftovers handed to the highest-remainder theme).
+  // NSF still uses exact weights (rounded to 50 only for display).
+  function largestRemainderAlloc(n, weights, themeIds) {
+    if (n <= 0) {
+      var z = {}; themeIds.forEach(function(id){ z[id] = 0; }); return z;
+    }
+    var exact = themeIds.map(function(id){ return { id: id, v: n * (weights[id] || 0) }; });
+    var floors = exact.map(function(e){ return { id: e.id, base: Math.floor(e.v), rem: e.v - Math.floor(e.v) }; });
+    var sumBase = floors.reduce(function(a,e){ return a + e.base; }, 0);
+    var leftover = n - sumBase;
+    // Sort by remainder desc; for ties prefer the theme with the larger
+    // raw weight so dominant-theme behaviour is consistent.
+    var sorted = floors.slice().sort(function(a,b){
+      if (b.rem !== a.rem) return b.rem - a.rem;
+      return (weights[b.id] || 0) - (weights[a.id] || 0);
+    });
+    for (var i = 0; i < leftover && i < sorted.length; i++) sorted[i].base += 1;
+    var out = {};
+    floors.forEach(function(e){ out[e.id] = e.base; });
+    return out;
+  }
+  var themeIds = themes.map(function(th){ return th.id; });
+
   var floorThemePIs = {};
   for (var f = 2; f <= topFloor; f++) {
     var fk = String(f);
@@ -7454,9 +7479,11 @@ function _skillBuildThematicFloorRows(d) {
       var pickedNASF = labNASF + offNASF;
       var w = typeWeights[t.id].weights;
       themes.forEach(function(th){
-        perTheme[th.id]    += pickedNASF * (w[th.id] || 0);
-        perThemePIs[th.id] += n          * (w[th.id] || 0);
+        perTheme[th.id] += pickedNASF * (w[th.id] || 0);
       });
+      // Integer PI attribution via largest-remainder per typology
+      var pisByTheme = largestRemainderAlloc(n, w, themeIds);
+      themeIds.forEach(function(id){ perThemePIs[id] += pisByTheme[id]; });
     });
     floorTheme[fk] = perTheme;
     floorThemePIs[fk] = perThemePIs;
@@ -7470,10 +7497,11 @@ function _skillBuildThematicFloorRows(d) {
         var w = typeWeights[t.id].weights;
         themes.forEach(function(th){
           floorTheme[fk][th.id] += bsmtDeskOff * (w[th.id] || 0);
-          // PI-count attribution for basement PIs whose desk+office land on
-          // F2: count those basement PIs against F2's theme PI totals.
-          floorThemePIs[fk][th.id] += bp * (w[th.id] || 0);
         });
+        // PI-count attribution for basement PIs whose desk + office land
+        // on F2: assign those PIs (integer) across themes the same way.
+        var bpByTheme = largestRemainderAlloc(bp, w, themeIds);
+        themeIds.forEach(function(id){ floorThemePIs[fk][id] += bpByTheme[id]; });
       });
     }
 
@@ -7554,14 +7582,15 @@ function _skillBuildThematicFloorRows(d) {
   var basementSharedLab = (d && typeof d.basementCoreNASF === 'number') ? d.basementCoreNASF : 0;
   var basementThemedTotal = 0;
   themes.forEach(function(th){ basementThemedTotal += (bsmtTheme[th.id] || 0); });
-  // Basement per-theme PI count (weighted contribution of each basement PI)
+  // Basement per-theme PI count (integer, largest-remainder per typology)
   var basementThemedPIs = {};
   themes.forEach(function(th){ basementThemedPIs[th.id] = 0; });
   S.types.forEach(function(t){
     var bp = (S.basementAllocation && +S.basementAllocation[t.id]) || 0;
     if (bp <= 0) return;
     var w = typeWeights[t.id].weights;
-    themes.forEach(function(th){ basementThemedPIs[th.id] += bp * (w[th.id] || 0); });
+    var bpByTheme = largestRemainderAlloc(bp, w, themeIds);
+    themeIds.forEach(function(id){ basementThemedPIs[id] += bpByTheme[id]; });
   });
   var basementRow = {
     label: 'Basement',
@@ -7602,13 +7631,13 @@ function _skillBuildThematicFloorRows(d) {
       if (v <= 0) return;
       var pct = (v / r.total * 100);
       if (pct < 0.5) return;
-      // v0.5.52: data label = PI count on line 1 (rounded to 0.1) +
-      // NSF (to nearest 50) on line 2. Narrow segments (<8%) drop the
-      // NSF line and show just the PI count; sub-4% slices skip both.
+      // v0.5.53: data label = integer PI count on line 1 + NSF (rounded
+      // to 50) on line 2. PI count is the largest-remainder integer share
+      // computed above (guarantees per-floor theme totals sum to the
+      // floor PI total). Narrow segments (<8%) drop the NSF line; <4%
+      // drop both.
       var v50 = _skillRound50(v);
-      var themePIs = (r.themedPIs && r.themedPIs[th.id]) || 0;
-      // Round to one decimal; suppress trailing '.0' so integer counts read clean.
-      var piStr = (Math.round(themePIs * 10) / 10).toFixed(1).replace(/\.0$/, '');
+      var piStr = String(Math.round((r.themedPIs && r.themedPIs[th.id]) || 0));
       h += '<div style="width:'+pct.toFixed(2)+'%;background:'+th.color+';color:#fff;font-size:.7rem;font-weight:700" title="'+th.name+': '+piStr+' PIs · '+F(v50)+' NSF">';
       if (pct > 4) {
         if (pct > 8) {
