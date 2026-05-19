@@ -4730,9 +4730,13 @@ function _buildProgramSheet(wb) {
     var grpBd = secIdx > 0 ? _MED_TOP : _NO_B;
     var grpStyle = _xstyle({ font:'Arial', size:14, bold:true, fill:sec.color, border:grpBd, halign:'left', valign:'center', indent:1 });
     _xset(ws, grpR, 2, { v:sec.title, s:grpStyle });
+    // v0.5.70: write empty-but-styled cells across C-I so each carries
+    // the thick top border + band fill. The merge below (B:I) hides their
+    // empty values so column B's title spans visually across the band.
     for (var c=3; c<=9; c++) {
       _xset(ws, grpR, c, { s:_xstyle({ size:11, fill:sec.color, border:grpBd, halign:'center', valign:'center' }) });
     }
+    ws['!merges'].push({ s:{r:grpR-1,c:1}, e:{r:grpR-1,c:8} });
     // J = % of NASF (formula patched after NASF row known)
     _xset(ws, grpR, 10, {
       f:'K'+grpR+'/$K$%NASF%', z:'0%',
