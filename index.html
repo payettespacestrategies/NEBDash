@@ -2092,33 +2092,25 @@ function renderStacking(d) {
     var fAssigned = fLab + fOff + corePerFloor + fComm + fEvent;
     var fDeficit = Math.max(0, fAssigned - d.researchFloorNASF);
     var unassigned = Math.max(0, d.researchFloorNASF - fAssigned);
-    // v0.5.49: when this floor carries basement-displaced desk + office
-    // (basement-PI desk + office live upstairs — currently routed to F2),
-    // split each band into two visibly distinct sub-segments so the
-    // basement contribution is unambiguous on the bar:
-    //   • Research Labs band:   floor-PI labs (var(--clrResearch))   +  basement-displaced desk (var(--ltCoral))
-    //   • Offices band:         floor-PI offices (FICM.office)        +  basement-displaced offices (FICM.officeA)
-    var fBsmtOff  = floorBreak[fk].bsmtOfficeNASF || 0;
-    var fBsmtDesk = floorBreak[fk].bsmtDeskNASF   || 0;
-    var fOwnLab   = Math.max(0, fLab - fBsmtDesk);
-    var fOwnOff   = Math.max(0, fOff - fBsmtOff);
+    // v0.5.50: collapse basement-displaced desk + office into one segment.
+    // The two were previously split into "Desk (+Bsmt.)" + "Offices (+Bsmt.)";
+    // per user feedback this is simpler as a single darker-periwinkle band
+    // labelled "Office Desk (Bsmt)" — combined area is bigger and easier to
+    // see than the two tiny adjacent slices.
+    var fBsmtOff     = floorBreak[fk].bsmtOfficeNASF || 0;
+    var fBsmtDesk    = floorBreak[fk].bsmtDeskNASF   || 0;
+    var fBsmtDeskOff = fBsmtDesk + fBsmtOff;
+    var fOwnLab      = Math.max(0, fLab - fBsmtDesk);
+    var fOwnOff      = Math.max(0, fOff - fBsmtOff);
     var segments = [
-      { label:'Research Labs', nasf:fOwnLab, color:'var(--clrResearch)' }
+      { label:'Research Labs', nasf:fOwnLab, color:'var(--clrResearch)' },
+      { label:'Faculty Office', nasf:fOwnOff, color:FICM.office }
     ];
-    if (fBsmtDesk > 0) {
+    if (fBsmtDeskOff > 0) {
       segments.push({
-        label: 'Write-Up Desk (+Bsmt.)',
-        labelHTML: 'Desk<br><span style="font-size:.72rem;font-weight:600;opacity:.9">(+Bsmt.)</span>',
-        nasf: fBsmtDesk,
-        color: 'var(--ltCoral)'
-      });
-    }
-    segments.push({ label:'Faculty Office', nasf:fOwnOff, color:FICM.office });
-    if (fBsmtOff > 0) {
-      segments.push({
-        label: 'Offices (+Bsmt.) — ' + F(fBsmtOff) + ' SF from basement-located PIs',
-        labelHTML: 'Offices<br><span style="font-size:.72rem;font-weight:600;opacity:.9">(+Bsmt.)</span>',
-        nasf: fBsmtOff,
+        label: 'Office Desk (Bsmt) — ' + F(fBsmtDeskOff) + ' SF from basement-located PIs',
+        labelHTML: 'Office Desk<br><span style="font-size:.72rem;font-weight:600;opacity:.9">(Bsmt)</span>',
+        nasf: fBsmtDeskOff,
         color: FICM.officeA
       });
     }
@@ -2218,7 +2210,7 @@ function renderStacking(d) {
   h += '<div style="overflow-x:auto"><table class="comp" style="font-size:.85rem">';
   // Header row: Typology + Basement + each upper floor + Assigned + Total + Δ
   h += '<tr><th style="min-width:160px">Typology</th>';
-  h += '<th style="min-width:80px;text-align:center;background:#F2F2F4">Basement</th>';
+  h += '<th style="min-width:80px;text-align:center">Basement</th>';
   for (var fh = 2; fh <= S.aboveGradeFloors; fh++) {
     h += '<th style="min-width:80px;text-align:center">Floor '+fh+'</th>';
   }
@@ -2233,7 +2225,7 @@ function renderStacking(d) {
     if (totalPIs === 0 && basementPIs === 0) return;
     var rowSum = basementPIs;
     // Basement input
-    var bsmtCell = '<td style="text-align:center;background:#FBFBFC"><input type="number" min="0" step="1" value="'+basementPIs+'" style="width:60px;font-size:.85rem" onchange="setBasementAlloc(\''+t.id+'\',this.value)"></td>';
+    var bsmtCell = '<td style="text-align:center"><input type="number" min="0" step="1" value="'+basementPIs+'" style="width:60px;font-size:.85rem" onchange="setBasementAlloc(\''+t.id+'\',this.value)"></td>';
     var floorCells = '';
     for (var fc2 = 2; fc2 <= S.aboveGradeFloors; fc2++) {
       var k2 = String(fc2);
@@ -2260,7 +2252,7 @@ function renderStacking(d) {
   // Basement total
   var bsmtTotal = 0;
   S.types.forEach(function(t) { bsmtTotal += (S.basementAllocation && S.basementAllocation[t.id]) || 0; });
-  h += '<td style="text-align:center;font-weight:900;color:var(--navy);background:#F2F2F4">'+bsmtTotal+'</td>';
+  h += '<td style="text-align:center;font-weight:900;color:var(--navy)">'+bsmtTotal+'</td>';
   for (var ff = 2; ff <= S.aboveGradeFloors; ff++) {
     var k3 = String(ff);
     var total = 0;
@@ -2279,18 +2271,53 @@ function renderStacking(d) {
   h += '<td style="text-align:center;color:var(--mut)">'+grandTotal+'</td>';
   h += '<td style="text-align:center;font-weight:900;color:'+(grandAssigned===grandTotal?'var(--green)':'var(--coral)')+'">'+(grandAssigned-grandTotal>=0?'+':'')+(grandAssigned-grandTotal)+'</td>';
   h += '</tr>';
-  // Floor NASF row (lab + office assigned per floor)
+  // v0.5.50: Lab + Office NSF row (renamed from NASF) now shows the basement
+  // as a stand-alone column too. The basement subtotal is JUST the
+  // basement-located lab NSF (open lab + lab support) — the basement PIs'
+  // desk + office is shown on the following row as living on Floor 2.
+  var basementLabNSF = 0;
+  var basementDeskOfficeOnF2 = 0;
+  S.types.forEach(function(_t){
+    var n = (S.basementAllocation && S.basementAllocation[_t.id]) || 0;
+    basementLabNSF        += (calcGroupOpenLab(_t) + calcGroupLabSupport(_t)) * n;
+    basementDeskOfficeOnF2 += (calcGroupDesk(_t) + _t.facultyOffice + _t.flexOffice) * n;
+  });
+  var basementCapNSF = Math.round((S.basementGSF || 0) * (S.basementEff || 0));
+
   h += '<tr style="background:#f0f7ff">';
-  h += '<td style="font-weight:700;color:var(--navy)">Lab + Office NASF</td>';
+  h += '<td style="font-weight:700;color:var(--navy)">Lab + Office NSF</td>';
+  // Basement cell — lab only
+  var bCapPct = basementCapNSF > 0 ? basementLabNSF / basementCapNSF * 100 : 0;
+  var bPctCol = bCapPct > 100 ? 'var(--coral)' : (bCapPct > 90 ? 'var(--gold)' : 'var(--mut)');
+  h += '<td style="text-align:center"><div style="font-family:\'IBM Plex Mono\',monospace;font-weight:700;color:var(--navy)">'+F(basementLabNSF)+'</div><div style="font-size:.7rem;color:'+bPctCol+'">'+bCapPct.toFixed(0)+'% of basement NSF</div></td>';
   for (var ff3 = 2; ff3 <= S.aboveGradeFloors; ff3++) {
     var k4 = String(ff3);
     var floorTotal = floorBreak[k4].lab + floorBreak[k4].office;
     var capPct = d.researchFloorNASF > 0 ? floorTotal / d.researchFloorNASF * 100 : 0;
     var pctCol = capPct > 100 ? 'var(--coral)' : (capPct > 90 ? 'var(--gold)' : 'var(--mut)');
-    h += '<td style="text-align:center"><div style="font-family:\'IBM Plex Mono\',monospace;font-weight:700;color:var(--navy)">'+F(floorTotal)+'</div><div style="font-size:.7rem;color:'+pctCol+'">'+capPct.toFixed(0)+'% of NASF</div></td>';
+    h += '<td style="text-align:center"><div style="font-family:\'IBM Plex Mono\',monospace;font-weight:700;color:var(--navy)">'+F(floorTotal)+'</div><div style="font-size:.7rem;color:'+pctCol+'">'+capPct.toFixed(0)+'% of NSF</div></td>';
   }
-  h += '<td colspan="3" style="text-align:center;color:var(--mut);font-size:.78rem">Floor NASF capacity: '+F(d.researchFloorNASF)+'</td>';
+  h += '<td colspan="3" style="text-align:center;color:var(--mut);font-size:.78rem">Upper floor NSF capacity: '+F(d.researchFloorNASF)+'<br>Basement NSF capacity: '+F(basementCapNSF)+'</td>';
   h += '</tr>';
+  // v0.5.50: "of which Bsmt. PI Desk + Office (routed to F2)" — informational
+  // row that surfaces the basement-displaced contribution that's already
+  // baked into the F2 cell above. Helps the user reconcile where the
+  // basement PIs' offices physically live.
+  if (basementDeskOfficeOnF2 > 0) {
+    h += '<tr style="background:#fafcff">';
+    h += '<td style="color:var(--mut);font-style:italic;font-size:.78rem;padding-left:14px">↳ of which Bsmt. PI Desk + Office (on Floor 2)</td>';
+    h += '<td style="text-align:center;color:var(--mut);font-size:.78rem">—</td>';
+    for (var ff4 = 2; ff4 <= S.aboveGradeFloors; ff4++) {
+      var k5 = String(ff4);
+      if (k5 === '2') {
+        h += '<td style="text-align:center"><div style="font-family:\'IBM Plex Mono\',monospace;font-weight:600;color:var(--mut);font-size:.82rem">'+F(basementDeskOfficeOnF2)+'</div><div style="font-size:.68rem;color:var(--mut)">routed from basement</div></td>';
+      } else {
+        h += '<td style="text-align:center;color:var(--mut);font-size:.78rem">—</td>';
+      }
+    }
+    h += '<td colspan="3"></td>';
+    h += '</tr>';
+  }
   h += '</table></div>';
   h += '<div style="margin-top:10px;display:flex;gap:8px;align-items:center">';
   h += '<button class="btn btn-out btn-sm" onclick="resetPIFloorAllocation()">Reset to even</button>';
@@ -2459,9 +2486,9 @@ function floorVis(label, segments, totalNASF, showNASF, floorGSF, maxFloorGSF, c
   segments.forEach(function(s) {
     var pct = totalNASF > 0 ? (s.nasf / totalNASF * 100) : 0;
     if (pct > 0.5) {
-      h += '<div style="width:'+pct.toFixed(1)+'%;background:'+s.color+'" title="'+s.label+': '+F(Math.round(s.nasf))+' NASF">';
+      h += '<div style="width:'+pct.toFixed(1)+'%;background:'+s.color+'" title="'+s.label+': '+F(Math.round(s.nasf))+' NSF">';
       // v0.5.49: segments may set `labelHTML` for multi-line/styled display
-      // (e.g. "Offices<br>(+Bsmt.)"). Fallback to plain `label`.
+      // (e.g. "Office Desk<br>(Bsmt)"). Fallback to plain `label`.
       if (pct > 8) h += '<span>'+(s.labelHTML || s.label)+'</span>';
       h += '</div>';
     }
@@ -2469,7 +2496,7 @@ function floorVis(label, segments, totalNASF, showNASF, floorGSF, maxFloorGSF, c
   // Capacity marker: red dashed line at the nominal NASF boundary
   if (isOver) {
     var capPct = (capacityNASF / totalNASF * 100).toFixed(1);
-    h += '<div style="position:absolute;left:'+capPct+'%;top:-2px;bottom:-2px;width:0;border-left:2.5px dashed #E53935;z-index:2" title="Floor capacity: '+F(capacityNASF)+' NASF"></div>';
+    h += '<div style="position:absolute;left:'+capPct+'%;top:-2px;bottom:-2px;width:0;border-left:2.5px dashed #E53935;z-index:2" title="Floor capacity: '+F(capacityNASF)+' NSF"></div>';
   }
   h += '</div></div>';
   if (showNASF) {
@@ -2482,9 +2509,20 @@ function floorVis(label, segments, totalNASF, showNASF, floorGSF, maxFloorGSF, c
     var nasfColor = isOver ? '#E53935'
                   : (capRatio >= 0.95 ? 'var(--green)' : 'var(--navy)');
     h += '<div style="font-family:\'IBM Plex Mono\',monospace;font-size:.75rem;font-weight:600;min-width:170px;text-align:right;line-height:1.45">';
-    h += '<span style="color:'+nasfColor+'">'+F(Math.round(assignedNASF))+'</span> <span style="color:var(--mut);font-weight:400">/ '+F(floorCap)+' NASF</span><br>';
+    // v0.5.50: line 2 was "GFA". Per user feedback, replace with the
+    // capacity headroom (Δ = capacity − programmed); turns red when the
+    // floor is over-programmed. NASF labels renamed to NSF throughout.
+    var nsfDelta  = floorCap - assignedNASF;
+    var deltaSign = nsfDelta > 0 ? '+' : (nsfDelta < 0 ? '−' : '±');
+    var deltaAbs  = Math.abs(Math.round(nsfDelta));
+    var deltaColor = (nsfDelta < 0) ? '#E53935'
+                   : (nsfDelta === 0 ? 'var(--green)' : 'var(--mut)');
+    var deltaLabel = (nsfDelta < 0) ? 'NSF over capacity'
+                   : (nsfDelta === 0 ? 'NSF at capacity'
+                                     : 'NSF headroom');
+    h += '<span style="color:'+nasfColor+'">'+F(Math.round(assignedNASF))+'</span> <span style="color:var(--mut);font-weight:400">/ '+F(floorCap)+' NSF</span><br>';
     h += '<span style="color:var(--teal)">'+F(floorDGSF)+'</span> <span style="color:var(--mut);font-weight:400">DGSF</span><br>';
-    h += '<span style="color:var(--mut)">'+F(floorGSF)+'</span> <span style="color:var(--mut);font-weight:400">GFA</span>';
+    h += '<span style="color:'+deltaColor+'">'+deltaSign+F(deltaAbs)+'</span> <span style="color:var(--mut);font-weight:400">'+deltaLabel+'</span>';
     h += '</div>';
   }
   h += '</div>';
@@ -7230,7 +7268,7 @@ function renderFloorStackingV5(d) {
   // Optimize Human Health Span, Climate Resilient Communities, Embodied AI).
   // PI typologies are split across themes proportional to S.piCategories[i].mix.
   var v3 = '<div class="card" data-skill-card="visual3"><div class="card-title">Building Section — Thematic Distribution</div>';
-  v3 += '<div class="card-sub">Each floor’s research NASF is colored by strategic-plan <strong>theme</strong> rather than by typology. Every PI typology’s lab + desk + office is split across themes proportional to its mix in the PI Mix tab. Shared facilities, ground-floor program, and community/event space appear in grey (no theme assignment).</div>';
+  v3 += '<div class="card-sub">Bar width = floor research NSF + Shared Lab Facilities (relative to the floor with the most). Coloured segments fill the bar 100% — one per strategic-plan theme, plus a pink <strong>Shared Lab Facilities</strong> band that matches the Shared colour in Building Section — Program Distribution. Each PI typology’s lab + desk + office NSF is split across themes proportional to its mix in the PI Mix tab. Non-research program (community, event, ground-floor, building support) is omitted.</div>';
   v3 += '<div style="max-width:900px;margin:14px auto 0">' + _skillBuildThematicFloorRows(d) + '</div>';
   v3 += '</div>';
 
@@ -7329,14 +7367,18 @@ function _skillBuildGFAFloorRows(d) {
   return h;
 }
 
-// v0.5.49: Visual 3 — Building Section — Thematic Distribution.
-// For each floor, allocate the floor's lab + desk + office NASF across the
-// four strategic-plan themes (Remote Environments, Optimize Human Health
-// Span, Climate Resilient Communities, Embodied AI). The split for each
-// typology comes from S.piCategories[*].mix — normalised so a typology
-// whose mix sums to 0 across all themes contributes 0 themed NASF.
-// Shared facilities, ground-floor program, and community/event space have
-// no theme assignment and render in a neutral "Shared / Common" colour.
+// v0.5.50: Visual 3 — Building Section — Thematic Distribution.
+// Now mirrors the "PIs by Floor" format: research NASF only, with
+// non-research program omitted. Each floor's bar is sized by its research
+// + shared-lab NSF (relative to the floor with the most), and segments
+// inside the bar fill it 100% — one per strategic-plan theme, plus a
+// pink "Shared Lab Facilities" segment that matches the Shared colour
+// used in Building Section — Program Distribution.
+// Themed NSF for each typology = (openLab + labSupport + desk + offices)
+// × PI count, split across themes proportional to S.piCategories[*].mix
+// (normalised so a typology whose mix is all-zero contributes nothing).
+// Basement carries only open lab + lab support — desk + office for
+// basement-located PIs are routed to Floor 2 (v0.5.49).
 function _skillBuildThematicFloorRows(d) {
   var THEME_COLORS = {
     'remote_environments':   '#2E75B6', // blue
@@ -7460,79 +7502,125 @@ function _skillBuildThematicFloorRows(d) {
   // Ground: entirely non-theme. Use d.gfNASF if available.
   var gfNASF = (d && d.gfNASF) || 0;
 
-  // ── Render ────────────────────────────────────────────────────────────
-  var maxFloorGSF = Math.max(S.basementGSF || 0, S.aboveGradeGSF || 0, S.penthouseGSF || 0) || 1;
+  // v0.5.50: rebuild — research-only bars, scaled to the floor with the
+  // most research+shared NSF; non-research program omitted entirely.
+  // The Shared band uses the pink/magenta from Visual 1 (var(--clrCore))
+  // so the two views read consistently.
+  var SHARED_LAB_COLOR = 'var(--clrCore)';
+  var SHARED_LAB_LABEL = 'Shared Lab Facilities';
 
-  function rowHTML(label, themedMap, otherNASF, floorGSF, capacityNASF) {
-    var widthPct = Math.round((floorGSF / maxFloorGSF) * 100);
-    var segments = [];
-    themes.forEach(function(th){
-      var v = Math.round(themedMap && themedMap[th.id] || 0);
-      if (v > 0) segments.push({ label: th.name, sf: v, color: th.color, textColor: '#fff' });
+  // Helper — per-floor PI count (so the right-side stack can echo
+  // "PIs / NSF" the same way PIs-by-Floor does).
+  function piCountUpper(fk) {
+    var floorPIs = alloc[fk] || {};
+    var n = 0;
+    S.types.forEach(function(t){ n += +(floorPIs[t.id] || 0); });
+    return n;
+  }
+  function piCountBasement() {
+    var n = 0;
+    S.types.forEach(function(t){
+      n += (S.basementAllocation && +S.basementAllocation[t.id]) || 0;
     });
-    if (otherNASF > 0) {
-      segments.push({ label: SHARED_LABEL, sf: Math.round(otherNASF), color: SHARED_COLOR, textColor: '#1A1A1A' });
-    }
-    var totalSF = segments.reduce(function(a,s){ return a + s.sf; }, 0);
-    var cap = (capacityNASF != null) ? capacityNASF : totalSF;
-    var barTotal = Math.max(cap, totalSF) || 1;
-    var isOver = totalSF > cap && cap > 0;
+    return n;
+  }
 
+  // Per-floor totals: themed + sharedLab (the corePerFloor portion)
+  var rows = [];
+  for (var fNum = topFloor; fNum >= 2; fNum--) {
+    var fkk = String(fNum);
+    var themed = floorTheme[fkk] || {};
+    var sharedLab = corePerFloor;       // already pink Shared in Visual 1
+    var total = 0;
+    themes.forEach(function(th){ total += (themed[th.id] || 0); });
+    total += sharedLab;
+    rows.push({
+      label: 'Floor ' + fNum,
+      themed: themed,
+      sharedLab: sharedLab,
+      total: total,
+      pis: piCountUpper(fkk)
+    });
+  }
+  // Basement — only basement-located lab NSF + basement core (Shared Lab)
+  var basementSharedLab = (d && typeof d.basementCoreNASF === 'number') ? d.basementCoreNASF : 0;
+  var basementThemedTotal = 0;
+  themes.forEach(function(th){ basementThemedTotal += (bsmtTheme[th.id] || 0); });
+  var basementRow = {
+    label: 'Basement',
+    themed: bsmtTheme,
+    sharedLab: basementSharedLab,
+    total: basementThemedTotal + basementSharedLab,
+    pis: piCountBasement()
+  };
+
+  // Bar-width scale: largest research+shared NSF across all rows
+  var maxNSF = 0;
+  rows.concat([basementRow]).forEach(function(r){ if (r.total > maxNSF) maxNSF = r.total; });
+  if (maxNSF <= 0) maxNSF = 1;
+
+  function rowHTML(r) {
+    if (r.total <= 0) {
+      var hE = '<div class="floor-row">';
+      hE += '<div class="floor-label">'+r.label+'</div>';
+      hE += '<div style="flex:1;display:flex;align-items:center;gap:8px">';
+      hE += '<div class="floor-bar" style="width:100%;flex:none;background:#ECEDEE;border:1px dashed #C2C3C8">';
+      hE += '<div style="width:100%;background:transparent;color:#8A8F95;font-size:.72rem;font-weight:600;letter-spacing:.5px" title="No research program on this floor"><span>(no research program)</span></div>';
+      hE += '</div></div>';
+      hE += '<div style="font-family:\'IBM Plex Mono\',monospace;font-size:.75rem;font-weight:600;min-width:155px;text-align:right;line-height:1.45">';
+      hE += '<span style="color:var(--mut)">0</span> <span style="color:var(--mut);font-weight:400">PIs</span><br>';
+      hE += '<span style="color:var(--mut)">0</span> <span style="color:var(--mut);font-weight:400">NSF</span>';
+      hE += '</div></div>';
+      return hE;
+    }
+    var widthPct = (r.total / maxNSF * 100);
     var h = '<div class="floor-row">';
-    h += '<div class="floor-label"'+(isOver?' style="color:#E53935"':'')+'>'+label+'</div>';
+    h += '<div class="floor-label">'+r.label+'</div>';
     h += '<div style="flex:1;display:flex;align-items:center;gap:8px">';
-    h += '<div class="floor-bar" style="width:'+widthPct+'%;flex:none;position:relative'+(isOver?';box-shadow:inset 0 0 0 2px #E53935':'')+'">';
-    segments.forEach(function(s) {
-      var pct = barTotal > 0 ? (s.sf / barTotal * 100) : 0;
-      if (pct > 0.5) {
-        h += '<div style="width:'+pct.toFixed(1)+'%;background:'+s.color+';color:'+s.textColor+'" title="'+s.label+': '+F(s.sf)+' NASF">';
-        if (pct > 8) h += '<span>'+s.label+'</span>';
+    h += '<div class="floor-bar" style="width:'+widthPct.toFixed(1)+'%;flex:none;background:#fafafa;border:1px dashed #ddd">';
+    // Theme segments first
+    themes.forEach(function(th){
+      var v = Math.round(r.themed && r.themed[th.id] || 0);
+      if (v <= 0) return;
+      var pct = (v / r.total * 100);
+      if (pct < 0.5) return;
+      h += '<div style="width:'+pct.toFixed(2)+'%;background:'+th.color+';color:#fff;font-size:.7rem;font-weight:700" title="'+th.name+': '+F(v)+' NSF">';
+      if (pct > 4) h += '<span>'+F(v)+'</span>';
+      h += '</div>';
+    });
+    // Shared Lab Facilities segment (pink/magenta, matches Visual 1)
+    if (r.sharedLab > 0) {
+      var sPct = (r.sharedLab / r.total * 100);
+      if (sPct > 0.5) {
+        h += '<div style="width:'+sPct.toFixed(2)+'%;background:'+SHARED_LAB_COLOR+';color:#fff;font-size:.7rem;font-weight:700" title="'+SHARED_LAB_LABEL+': '+F(Math.round(r.sharedLab))+' NSF">';
+        if (sPct > 4) h += '<span>'+F(Math.round(r.sharedLab))+'</span>';
         h += '</div>';
       }
-    });
-    if (isOver && cap > 0) {
-      var capPct = (cap / barTotal * 100).toFixed(1);
-      h += '<div style="position:absolute;left:'+capPct+'%;top:-2px;bottom:-2px;width:0;border-left:2.5px dashed #E53935;z-index:2" title="Floor capacity: '+F(cap)+' NASF"></div>';
     }
     h += '</div></div>';
-    // Right-side numeric stack
+    // Right-side numeric stack — mirror PIs-by-Floor format
     h += '<div style="font-family:\'IBM Plex Mono\',monospace;font-size:.75rem;font-weight:600;min-width:155px;text-align:right;line-height:1.45">';
-    var nasfColor = isOver ? '#E53935' : 'var(--navy)';
-    h += '<span style="color:'+nasfColor+'">'+F(totalSF)+'</span> <span style="color:var(--mut);font-weight:400">/ '+F(cap)+' NASF</span><br>';
-    h += '<span style="color:var(--mut)">'+F(Math.round(floorGSF))+'</span> <span style="color:var(--mut);font-weight:400">GFA</span>';
+    h += '<span style="color:var(--navy)">'+r.pis+'</span> <span style="color:var(--mut);font-weight:400">PI'+(r.pis===1?'':'s')+'</span><br>';
+    h += '<span style="color:var(--navy)">'+F(Math.round(r.total))+'</span> <span style="color:var(--mut);font-weight:400">NSF</span>';
     h += '</div>';
     h += '</div>';
     return h;
   }
 
   var h = '';
-
-  // Penthouse (no themed content)
-  h += rowHTML('Penthouse', {}, 0, S.penthouseGSF || 0, floorCapacity('PH'));
-
-  // Upper floors top-down
-  for (var fNum = topFloor; fNum >= 2; fNum--) {
-    var fkk = String(fNum);
-    h += rowHTML('Floor ' + fNum, floorTheme[fkk] || {}, floorOther[fkk] || 0,
-                 S.aboveGradeGSF || 0, floorCapacity(fkk));
-  }
-
-  // Ground floor (entirely non-theme)
-  var gfGSF = (S.groundFloorGSF != null) ? S.groundFloorGSF : (S.aboveGradeGSF || 0);
-  h += rowHTML('Floor 1 (Ground)', {}, gfNASF, gfGSF, floorCapacity('G'));
-
-  // Ground/basement separator (matches Visual 1 / Visual 2 style)
+  // Upper research floors (top down)
+  rows.forEach(function(r){ h += rowHTML(r); });
+  // Grade line (basement separator) — matches PIs-by-Floor
   h += '<div style="border-top:3px solid #000;margin:4px 0"></div>';
-
   // Basement
-  h += rowHTML('Basement', bsmtTheme, bsmtOther, S.basementGSF || 0, floorCapacity('B'));
+  h += rowHTML(basementRow);
 
-  // Theme legend
+  // Theme + Shared Lab Facilities legend
   var legend = '<div style="display:flex;flex-wrap:wrap;gap:14px;margin-top:16px;font-size:.82rem;color:var(--navy);font-weight:600">';
   themes.forEach(function(th){
     legend += '<div style="display:flex;align-items:center;gap:6px"><div style="width:14px;height:14px;border-radius:3px;background:'+th.color+'"></div>'+th.name+'</div>';
   });
-  legend += '<div style="display:flex;align-items:center;gap:6px"><div style="width:14px;height:14px;border-radius:3px;background:'+SHARED_COLOR+'"></div>'+SHARED_LABEL+'</div>';
+  legend += '<div style="display:flex;align-items:center;gap:6px"><div style="width:14px;height:14px;border-radius:3px;background:'+SHARED_LAB_COLOR+'"></div>'+SHARED_LAB_LABEL+'</div>';
   legend += '</div>';
 
   return h + legend;
@@ -7742,17 +7830,11 @@ function _skillBuildPIFloorRows(d) {
       var pct = r.totalNASF > 0 ? (s.sf / r.totalNASF * 100) : 0;
       if (pct > 0.4) {
         h += '<div style="width:'+pct.toFixed(2)+'%;background:'+s.color+';color:#fff;font-size:.7rem;font-weight:700" title="'+s.label+': '+s.pis+' PI'+(s.pis===1?'':'s')+' · '+F(Math.round(s.sf))+' SF">';
+        // v0.5.50: per user — the typology legend sits above this card, so
+        // segment labels are reduced to the PI count alone. Narrow segments
+        // still get the count; only sub-4% slices skip the label entirely.
         if (pct > 4) {
-          // Choose label width by segment share: wider segments show the
-          // full label; narrower ones use the shared abbreviation helper.
-          // The helper does per-word substitution + soft truncation; CSS
-          // overflow:hidden + text-align:center handle any residual overflow.
-          var disp = s.label;
-          if (pct < 22) {
-            // ~22 cols of bar → ~16-18 chars across two wrapped lines
-            disp = window._skillAbbrev(s.label, pct < 10 ? 12 : 18, { maxWord: pct < 10 ? 6 : 8 });
-          }
-          h += '<span>'+disp+' ('+s.pis+')</span>';
+          h += '<span>'+s.pis+'</span>';
         }
         h += '</div>';
       }
