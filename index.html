@@ -2034,7 +2034,8 @@ function renderStacking(d) {
   h += '</div>'; // close flex wrapper
   h += '</div>'; // close card
 
-  h += '<div class="note-bl">Net square footage on each occupied floor. Penthouse is always Building Support (MEP). Research floors show assigned program categories.</div>';
+  // v0.5.52: removed the blue note-bl callout per user — the diagram and
+  // legend below speak for themselves.
 
   // Shared floor split from Tab 4 settings
   var cs = S.coreFloorSplit;
@@ -2061,16 +2062,10 @@ function renderStacking(d) {
     upperDeficit = Math.max(upperDeficit, asgn - d.researchFloorNASF);
   }
 
-  // Validation warning when any floor is over-programmed
-  if (gfDeficit > 0 || bsmtDeficit > 0 || upperDeficit > 0) {
-    h += '<div style="margin:8px 0 4px;padding:10px 14px;background:#FFEBEE;border-left:4px solid #E53935;border-radius:4px;font-size:.85rem;color:#B71C1C;line-height:1.55">';
-    h += '<strong>\u26a0 Floor(s) Over-Programmed</strong><br>';
-    if (gfDeficit > 0) h += 'Ground floor assigned <strong>'+F(gfAssigned)+' NASF</strong> exceeds capacity of <strong>'+F(d.gfNASF)+'</strong> by <strong>'+F(gfDeficit)+'</strong>. ';
-    if (bsmtDeficit > 0) h += 'Basement assigned <strong>'+F(bsmtAssigned)+' NASF</strong> exceeds capacity of <strong>'+F(d.basementNASF)+'</strong> by <strong>'+F(bsmtDeficit)+'</strong>. ';
-    if (upperDeficit > 0) h += 'At least one upper floor exceeds capacity of <strong>'+F(d.researchFloorNASF)+'</strong> by up to <strong>'+F(upperDeficit)+'</strong>. ';
-    h += '<br><span style="color:#5D4037;font-size:.82rem">Adjust the building envelope (Tab 1), reduce program, or change the per-floor PI assignment below so every floor fits its assigned program.</span>';
-    h += '</div>';
-  }
+  // v0.5.52: removed the red "Floor(s) Over-Programmed" banner per user.
+  // Each floor's right-side stack already flags over/under capacity via
+  // the colour-coded \u0394 NSF number (red = over, yellow = under, green = on
+  // target), and the basement row label turns red when over capacity.
 
   h += '<div class="card"><div class="card-title">Building Section \u2014 Program Distribution</div>';
   h += '<div class="card-sub">Bar widths are proportional to floor plate GFA. Colored segments show assigned NASF. Labels at right show NASF, Departmental Gross (DGSF = GFA \u00d7 '+(S.deptGrossPct*100).toFixed(0)+'%), and Gross Floor Area (GFA). Shared split controlled on Tab 4. Per-floor PI assignment controlled below.</div>';
@@ -2108,8 +2103,10 @@ function renderStacking(d) {
     ];
     if (fBsmtDeskOff > 0) {
       segments.push({
-        label: 'Office Desk (Bsmt) — ' + F(fBsmtDeskOff) + ' SF from basement-located PIs',
-        labelHTML: 'Office Desk<br><span style="font-size:.72rem;font-weight:600;opacity:.9">(Bsmt)</span>',
+        label: 'Office (+Bsmt) — ' + F(fBsmtDeskOff) + ' SF from basement-located PIs (desk + offices)',
+        // Line 1 ('Office') matches the Faculty Office segment label on the
+        // other floors; line 2 ('(+Bsmt)') flags the basement contribution.
+        labelHTML: 'Office<br><span style="font-size:.72rem;font-weight:600;opacity:.9">(+Bsmt)</span>',
         nasf: fBsmtDeskOff,
         color: FICM.officeA
       });
@@ -7264,7 +7261,7 @@ function renderFloorStackingV5(d) {
   // the strategic-plan theme contribution (Remote Environments,
   // Optimize Human Health Span, Climate Resilient Communities, Embodied AI).
   // PI typologies are split across themes proportional to S.piCategories[i].mix.
-  var v3 = '<div class="card" data-skill-card="visual3"><div class="card-title">Building Section — Thematic Distribution</div>';
+  var v3 = '<div class="card" data-skill-card="visual3"><div class="card-title">Thematic Distribution</div>';
   v3 += '<div class="card-sub">Bar width = floor research NSF + Shared Lab Facilities (relative to the floor with the most). Coloured segments fill the bar 100% — one per strategic-plan theme, plus a pink <strong>Shared Lab Facilities</strong> band that matches the Shared colour in Building Section — Program Distribution. Each PI typology’s lab + desk + office NSF is split across themes proportional to its mix in the PI Mix tab. Non-research program (community, event, ground-floor, building support) is omitted.</div>';
   // v0.5.51: legend chips above the bars (mirrors PIs by Floor placement)
   v3 += '<div class="legend" style="margin-top:8px">' + _skillBuildThematicLegend() + '</div>';
@@ -7439,11 +7436,16 @@ function _skillBuildThematicFloorRows(d) {
     var coreSplitResearch = (S.coreFloorSplit && S.coreFloorSplit.research) || 0;
     corePerFloor = researchFloors > 0 ? d.coreNASF * coreSplitResearch / researchFloors : 0;
   }
+  // v0.5.52: track per-theme PI count too (fractional — sum of typology
+  // PI counts weighted by their theme share). Used as the segment data
+  // label so each band shows "<PIs> / <NSF>" consistent with PIs by Floor.
+  var floorThemePIs = {};
   for (var f = 2; f <= topFloor; f++) {
     var fk = String(f);
     var floorPIs = alloc[fk] || {};
     var perTheme = {};
-    themes.forEach(function(th){ perTheme[th.id] = 0; });
+    var perThemePIs = {};
+    themes.forEach(function(th){ perTheme[th.id] = 0; perThemePIs[th.id] = 0; });
     S.types.forEach(function(t){
       var n = +(floorPIs[t.id] || 0);
       if (n <= 0) return;
@@ -7452,10 +7454,12 @@ function _skillBuildThematicFloorRows(d) {
       var pickedNASF = labNASF + offNASF;
       var w = typeWeights[t.id].weights;
       themes.forEach(function(th){
-        perTheme[th.id] += pickedNASF * (w[th.id] || 0);
+        perTheme[th.id]    += pickedNASF * (w[th.id] || 0);
+        perThemePIs[th.id] += n          * (w[th.id] || 0);
       });
     });
     floorTheme[fk] = perTheme;
+    floorThemePIs[fk] = perThemePIs;
 
     // Add basement-displaced desk + office on Floor 2 (per v0.5.49 routing)
     if (f === 2) {
@@ -7466,6 +7470,9 @@ function _skillBuildThematicFloorRows(d) {
         var w = typeWeights[t.id].weights;
         themes.forEach(function(th){
           floorTheme[fk][th.id] += bsmtDeskOff * (w[th.id] || 0);
+          // PI-count attribution for basement PIs whose desk+office land on
+          // F2: count those basement PIs against F2's theme PI totals.
+          floorThemePIs[fk][th.id] += bp * (w[th.id] || 0);
         });
       });
     }
@@ -7529,6 +7536,7 @@ function _skillBuildThematicFloorRows(d) {
   for (var fNum = topFloor; fNum >= 2; fNum--) {
     var fkk = String(fNum);
     var themed = floorTheme[fkk] || {};
+    var themedPIs = floorThemePIs[fkk] || {};
     var sharedLab = corePerFloor;       // already pink Shared in Visual 1
     var total = 0;
     themes.forEach(function(th){ total += (themed[th.id] || 0); });
@@ -7536,6 +7544,7 @@ function _skillBuildThematicFloorRows(d) {
     rows.push({
       label: 'Floor ' + fNum,
       themed: themed,
+      themedPIs: themedPIs,
       sharedLab: sharedLab,
       total: total,
       pis: piCountUpper(fkk)
@@ -7545,9 +7554,19 @@ function _skillBuildThematicFloorRows(d) {
   var basementSharedLab = (d && typeof d.basementCoreNASF === 'number') ? d.basementCoreNASF : 0;
   var basementThemedTotal = 0;
   themes.forEach(function(th){ basementThemedTotal += (bsmtTheme[th.id] || 0); });
+  // Basement per-theme PI count (weighted contribution of each basement PI)
+  var basementThemedPIs = {};
+  themes.forEach(function(th){ basementThemedPIs[th.id] = 0; });
+  S.types.forEach(function(t){
+    var bp = (S.basementAllocation && +S.basementAllocation[t.id]) || 0;
+    if (bp <= 0) return;
+    var w = typeWeights[t.id].weights;
+    themes.forEach(function(th){ basementThemedPIs[th.id] += bp * (w[th.id] || 0); });
+  });
   var basementRow = {
     label: 'Basement',
     themed: bsmtTheme,
+    themedPIs: basementThemedPIs,
     sharedLab: basementSharedLab,
     total: basementThemedTotal + basementSharedLab,
     pis: piCountBasement()
@@ -7583,11 +7602,21 @@ function _skillBuildThematicFloorRows(d) {
       if (v <= 0) return;
       var pct = (v / r.total * 100);
       if (pct < 0.5) return;
-      // v0.5.51: in-bar segment labels round to nearest 50 (consistent
-      // with the right-side stack and with PIs by Floor).
+      // v0.5.52: data label = PI count on line 1 (rounded to 0.1) +
+      // NSF (to nearest 50) on line 2. Narrow segments (<8%) drop the
+      // NSF line and show just the PI count; sub-4% slices skip both.
       var v50 = _skillRound50(v);
-      h += '<div style="width:'+pct.toFixed(2)+'%;background:'+th.color+';color:#fff;font-size:.7rem;font-weight:700" title="'+th.name+': '+F(v50)+' NSF">';
-      if (pct > 4) h += '<span>'+F(v50)+'</span>';
+      var themePIs = (r.themedPIs && r.themedPIs[th.id]) || 0;
+      // Round to one decimal; suppress trailing '.0' so integer counts read clean.
+      var piStr = (Math.round(themePIs * 10) / 10).toFixed(1).replace(/\.0$/, '');
+      h += '<div style="width:'+pct.toFixed(2)+'%;background:'+th.color+';color:#fff;font-size:.7rem;font-weight:700" title="'+th.name+': '+piStr+' PIs · '+F(v50)+' NSF">';
+      if (pct > 4) {
+        if (pct > 8) {
+          h += '<span>'+piStr+'<br><span style="font-weight:500;opacity:.92;font-size:.66rem">'+F(v50)+'</span></span>';
+        } else {
+          h += '<span>'+piStr+'</span>';
+        }
+      }
       h += '</div>';
     });
     // Shared Lab Facilities segment (pink/magenta, matches Visual 1)
@@ -7596,7 +7625,10 @@ function _skillBuildThematicFloorRows(d) {
       if (sPct > 0.5) {
         var sf50 = _skillRound50(r.sharedLab);
         h += '<div style="width:'+sPct.toFixed(2)+'%;background:'+SHARED_LAB_COLOR+';color:#fff;font-size:.7rem;font-weight:700" title="'+SHARED_LAB_LABEL+': '+F(sf50)+' NSF">';
-        if (sPct > 4) h += '<span>'+F(sf50)+'</span>';
+        if (sPct > 4) {
+          // Shared Lab Facilities is not PI-attributed — just SF.
+          h += '<span>'+F(sf50)+'</span>';
+        }
         h += '</div>';
       }
     }
@@ -7857,11 +7889,16 @@ function _skillBuildPIFloorRows(d) {
       var pct = r.totalNASF > 0 ? (s.sf / r.totalNASF * 100) : 0;
       if (pct > 0.4) {
         h += '<div style="width:'+pct.toFixed(2)+'%;background:'+s.color+';color:#fff;font-size:.7rem;font-weight:700" title="'+s.label+': '+s.pis+' PI'+(s.pis===1?'':'s')+' · '+F(Math.round(s.sf))+' SF">';
-        // v0.5.50: per user — the typology legend sits above this card, so
-        // segment labels are reduced to the PI count alone. Narrow segments
-        // still get the count; only sub-4% slices skip the label entirely.
+        // v0.5.52: data label = PI count on line 1, NSF (rounded to 50)
+        // on line 2. Narrow segments (<8%) drop the NSF line and show
+        // just the PI count; sub-4% slices skip the label entirely.
         if (pct > 4) {
-          h += '<span>'+s.pis+'</span>';
+          var sfStr = F(_skillRound50(s.sf));
+          if (pct > 8) {
+            h += '<span>'+s.pis+'<br><span style="font-weight:500;opacity:.92;font-size:.66rem">'+sfStr+'</span></span>';
+          } else {
+            h += '<span>'+s.pis+'</span>';
+          }
         }
         h += '</div>';
       }
