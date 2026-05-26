@@ -4904,10 +4904,16 @@ function _writeDetailRow(ws, r, rd) {
 
 // ============================================================
 // Build Cost Estimator Summary sheet
+// v0.5.71+: Removed verbose Building Inputs block; replaced with compact
+// Summary Metrics band (GSF, NASF, DGSF, %DGSF/GSF, Net-to-Gross %).
+// Shared Facilities merged into the Research subgroup. Smaller font/
+// narrower columns. Band rows now merge B:I so column C never hides
+// the label that begins in column B (same fix as NEB Program tab).
 // ============================================================
 function _buildCostSheet(wb, ctx) {
   var ws = {};
-  var widths = { A:9.18, B:5.82, C:42.54, D:10.5, E:9.0, F:10.5, G:10.5, H:9.0, I:7.0, J:9.0, K:20.0, L:38.0 };
+  // Tighter widths so the colored bands don't dominate the page
+  var widths = { A:6.0, B:4.5, C:34.0, D:9.0, E:8.0, F:9.0, G:9.0, H:8.0, I:6.5, J:8.0, K:15.0, L:30.0 };
   ws['!cols'] = ['A','B','C','D','E','F','G','H','I','J','K','L'].map(function(c){return {wch:widths[c]};});
   ws['!rows'] = [];
   ws['!merges'] = [];
@@ -4915,24 +4921,25 @@ function _buildCostSheet(wb, ctx) {
 
   // Header rows 2-3
   rowH(2, 22.0);
-  _xset(ws, 2, 2,  { v:'NORTHWESTERN ENGINEERING BUILDING', s:_xstyle({ font:'Arial Black', size:14, halign:'left', valign:'center' }) });
-  _xset(ws, 2, 12, { v:'PAYETTE', s:_xstyle({ font:'Arial Black', size:14, halign:'right', valign:'center' }) });
-  rowH(3, 25.0);
-  _xset(ws, 3, 2,  { v:'Cost Estimator Summary', s:_xstyle({ size:20, bold:true, halign:'left', valign:'center' }) });
-  _xset(ws, 3, 12, { v:'Date', s:_xstyle({ size:11, halign:'right', valign:'center' }) });
+  _xset(ws, 2, 2,  { v:'NORTHWESTERN ENGINEERING BUILDING', s:_xstyle({ font:'Arial Black', size:12, halign:'left', valign:'center' }) });
+  _xset(ws, 2, 12, { v:'PAYETTE', s:_xstyle({ font:'Arial Black', size:12, halign:'right', valign:'center' }) });
+  rowH(3, 22.0);
+  _xset(ws, 3, 2,  { v:'Cost Estimator Summary', s:_xstyle({ size:16, bold:true, halign:'left', valign:'center' }) });
+  _xset(ws, 3, 12, { v:'Date', s:_xstyle({ size:10, halign:'right', valign:'center' }) });
   rowH(4, 5.25);
-  rowH(5, 15.0); rowH(6, 28); rowH(7, 5.25);
+  rowH(5, 14.0); rowH(6, 24.0); rowH(7, 5.25);
 
-  _xset(ws, 5, 2, { v:'Cost Group', s:_xstyle({ size:11, halign:'left', valign:'center' }) });
-  _xset(ws, 5, 4, { v:'Line Item Detail', s:_xstyle({ size:11, halign:'center', valign:'center' }) });
+  _xset(ws, 5, 2, { v:'Cost Group', s:_xstyle({ size:10, halign:'center', valign:'center' }) });
+  _xset(ws, 5, 4, { v:'Line Item Detail', s:_xstyle({ size:10, halign:'center', valign:'center' }) });
   ws['!merges'].push({ s:{r:4,c:3}, e:{r:4,c:10} });
-  _xset(ws, 5, 12, { v:'Remarks', s:_xstyle({ size:10 }) });
+  _xset(ws, 5, 12, { v:'Remarks', s:_xstyle({ size:9, halign:'center', valign:'center' }) });
 
+  // Column headings — ALL centered, smaller font
   var hdrs6 = [['C','Description'],['D','NASF'],['E','DGSF\nFactor'],['F','GFA'],['G','GSF'],
                ['H','$/SF'],['I','Qty'],['J','%'],['K','Subtotal']];
   hdrs6.forEach(function(h){
     var col = h[0].charCodeAt(0)-64;
-    _xset(ws, 6, col, { v:h[1], s:_xstyle({ size:11, halign:'center', valign:'center', wrap:true }) });
+    _xset(ws, 6, col, { v:h[1], s:_xstyle({ size:9, bold:true, halign:'center', valign:'center', wrap:true }) });
   });
 
   var BLD_C  = _GROUP_COLORS.support;
@@ -4943,26 +4950,32 @@ function _buildCostSheet(wb, ctx) {
   var RATE_FILL  = 'FFF4C7';
   var INPUT_FILL = 'E9FFF7';
 
+  // Band row — label in B; C-I styled but value-less so the label visually
+  // spans across columns. Merging B:I prevents column C from cutting off
+  // the column-B label (the same overlap fix used on the NEB Program tab).
   function band(row, color, label, mark) {
-    rowH(row, 19.0);
+    rowH(row, 17.0);
     var bd = mark ? _MED_TOP : _NO_B;
-    for (var c=2; c<=12; c++) {
-      _xset(ws, row, c, { s:_xstyle({ size:14, bold:true, fill:color, border:bd, halign:'center', valign:'center' }) });
+    _xset(ws, row, 2, { v:label, s:_xstyle({ size:11, bold:true, fill:color, border:bd, halign:'left', valign:'center', indent:1 }) });
+    for (var c=3; c<=9; c++) {
+      _xset(ws, row, c, { s:_xstyle({ size:11, fill:color, border:bd, halign:'center', valign:'center' }) });
     }
-    _xset(ws, row, 2, { v:label, s:_xstyle({ size:14, bold:true, fill:color, border:bd, halign:'left', valign:'center', indent:1 }) });
+    ws['!merges'].push({ s:{r:row-1,c:1}, e:{r:row-1,c:8} });
+    _xset(ws, row, 10, { s:_xstyle({ size:11, bold:true, fill:color, border:bd, halign:'center', valign:'center' }) });
+    _xset(ws, row, 11, { s:_xstyle({ size:11, bold:true, fill:color, border:bd, halign:'right', valign:'center', indent:1 }) });
+    _xset(ws, row, 12, { s:_xstyle({ size:11, fill:color, border:bd, halign:'left', valign:'center' }) });
   }
   function subgroup(row, label, kFormula) {
-    rowH(row, 14.5);
-    _xset(ws, row, 3, { v:label, s:_xstyle({ size:11, bold:true, border:_HAIR_B, halign:'left', valign:'center' }) });
-    // Always create K cell — may be patched later with the actual sum formula
-    _xset(ws, row, 11, { f:kFormula || 'SUM(K'+row+':K'+row+')', z:'"$"#,##0',
-      s:_xstyle({ size:11, bold:true, border:_HAIR_B, halign:'right', valign:'center', indent:1 }) });
+    rowH(row, 13.5);
+    _xset(ws, row, 3, { v:label, s:_xstyle({ size:10, bold:true, border:_HAIR_B, halign:'left', valign:'center' }) });
+    _xset(ws, row, 11, { f:kFormula || ('SUM(K'+row+':K'+row+')'), z:'"$"#,##0',
+      s:_xstyle({ size:10, bold:true, border:_HAIR_B, halign:'right', valign:'center', indent:1 }) });
   }
-  // Detail row writer for cost sheet
+  // Detail row writer — size 10
   function detail(row, o) {
-    rowH(row, 14.5);
+    rowH(row, 13.5);
     var bd = _HAIR_B;
-    var body = function(extra){ return _xstyle(Object.assign({ size:11, border:bd, valign:'center' }, extra||{})); };
+    var body = function(extra){ return _xstyle(Object.assign({ size:10, border:bd, valign:'center' }, extra||{})); };
     _xset(ws, row, 3, { v:o.desc||'', s:body({ halign:'left', indent:1 }) });
     if (o.nasf !== undefined) _xset(ws, row, 4, (typeof o.nasf==='string' && o.nasf.charAt(0)==='=' ? { f:o.nasf.substr(1) } : { v:o.nasf }));
     var c4 = ws[_xa(row,4)]; if (c4) { c4.z='#,##0'; c4.s=body({ halign:'right', indent:1, fill:o.editableNASF?INPUT_FILL:undefined }); }
@@ -4980,32 +4993,36 @@ function _buildCostSheet(wb, ctx) {
     var c10 = ws[_xa(row,10)]; if (c10) { c10.z='0.00%'; c10.s=body({ halign:'right', indent:1, fill:(o.pct!==undefined && typeof o.pct!=='string')?RATE_FILL:undefined }); }
     if (o.subtotal !== undefined) _xset(ws, row, 11, (typeof o.subtotal==='string' && o.subtotal.charAt(0)==='=' ? { f:o.subtotal.substr(1) } : { v:o.subtotal }));
     var c11 = ws[_xa(row,11)]; if (c11) { c11.z='"$"#,##0'; c11.s=body({ halign:'right', indent:1 }); }
-    _xset(ws, row, 12, { v:o.remarks||'', s:_xstyle({ size:10, border:bd, halign:'left', valign:'center' }) });
+    _xset(ws, row, 12, { v:o.remarks||'', s:_xstyle({ size:9, border:bd, halign:'left', valign:'center' }) });
   }
 
   var nasfRow = ctx.nasfRow;
   var totalGSF = ctx.totalGSF;
 
-  // 1. Building Inputs band
+  // 1. Building Summary Metrics band (replaces Building Inputs)
+  //    Compact 5-row metrics block: GSF, NASF, DGSF, %DGSF/GSF, Net-to-Gross %
   var r = 8;
-  band(r, BLD_C, 'Building Inputs', false); r += 1; rowH(r, 6.0); r += 1;
+  band(r, BLD_C, 'Building Summary Metrics', false); r += 1; rowH(r, 5.0); r += 1;
   var inputsFirst = r;
-  detail(r, { desc:'Total GSF', gsf:totalGSF, remarks:'Editable \u2014 basement + above-grade \u00d7 N + penthouse', editableInput:true }); r += 1;
-  detail(r, { desc:'Total NASF (linked from NEB Program)', nasf:"='NEB Program'!K"+nasfRow, remarks:'Live link \u2014 updates from program tab' }); r += 1;
-  detail(r, { desc:'Departmental Gross % (DGSF / GSF)', pct:S.deptGrossPct, remarks:'Editable \u2014 share of GSF assigned to departmental gross' }); r += 1;
-  detail(r, { desc:'Departmental Gross SF (DGSF)', gsf:'=ROUND(G'+inputsFirst+'*J'+(inputsFirst+2)+',0)', remarks:'Total GSF \u00d7 DGSF %' }); r += 1;
-  detail(r, { desc:'NASF \u2192 DGSF inflation factor', factor:'=G'+(inputsFirst+3)+'/D'+(inputsFirst+1), remarks:'DGSF / NASF' }); r += 1;
+  detail(r, { desc:'Total GSF', gsf:totalGSF, remarks:'Total gross square feet (editable)', editableInput:true }); r += 1;
+  detail(r, { desc:'Total NASF (linked from NEB Program)', nasf:"='NEB Program'!K"+nasfRow, remarks:'Net assignable SF — live link from program tab' }); r += 1;
+  detail(r, { desc:'Total DGSF (Departmental Gross)', gsf:'=ROUND(G'+inputsFirst+'*J'+(inputsFirst+3)+',0)', remarks:'GSF × Departmental Gross %' }); r += 1;
+  detail(r, { desc:'DGSF / GSF (Departmental Gross %)', pct:S.deptGrossPct, remarks:'Share of GSF assigned to departmental gross' }); r += 1;
+  detail(r, { desc:'Net-to-Gross (NASF → DGSF as %)', pct:'=G'+(inputsFirst+2)+'/D'+(inputsFirst+1)+'-1', remarks:'(DGSF / NASF) − 1, shown as percentage' }); r += 1;
 
-  var GSF_CELL = 'G'+inputsFirst;
-  var DGSF_FACTOR_CELL = 'E'+(inputsFirst+4);
+  var GSF_CELL  = 'G'+inputsFirst;
+  var NASF_CELL = 'D'+(inputsFirst+1);
+  var DGSF_CELL = 'G'+(inputsFirst+2);
+  // DGSF factor for line GFA: DGSF / NASF, evaluated inline
+  var DGSF_FACTOR_EXPR = '($'+DGSF_CELL+'/$'+NASF_CELL+')';
   rowH(r, 5.25); r += 1;
 
-  // 2. Program Fitout band
-  band(r, PROG_C, 'Program Fitout \u2014 NASF \u2192 GFA \u2192 Cost', true);
-  var bandProgRow = r; r += 1; rowH(r, 6.0); r += 1;
+  // 2. Program Fitout band — Research (PIs + Shared) vs Non-Research
+  band(r, PROG_C, 'Program Fitout — NASF → GFA → Cost', true);
+  var bandProgRow = r; r += 1; rowH(r, 5.0); r += 1;
 
-  // PI Typologies sub-group
-  var sgPiRow = r; subgroup(sgPiRow, 'PI Typologies'); var piFirst = r+1; r += 1;
+  // Research sub-group: PI typologies + Shared Facilities merged
+  var sgResRow = r; subgroup(sgResRow, 'Research'); var resFirst = r+1; r += 1;
   S.types.forEach(function(t) {
     if (t.pis <= 0) return;
     var groupNasf = t.pis * (t.fteCount * (t.openLabPerFTE + t.labSupportPerFTE + t.deskPerFTE) + t.facultyOffice + t.flexOffice);
@@ -5013,7 +5030,7 @@ function _buildCostSheet(wb, ctx) {
     detail(r, {
       desc: t.label + '  (' + t.pis + ' PIs)',
       nasf: groupNasf,
-      factor: '=$'+DGSF_FACTOR_CELL,
+      factor: '='+DGSF_FACTOR_EXPR,
       gfa: '=ROUND(D'+r+'*E'+r+',0)',
       rate: rate,
       subtotal: '=F'+r+'*H'+r,
@@ -5022,17 +5039,13 @@ function _buildCostSheet(wb, ctx) {
     });
     r += 1;
   });
-  var piLast = r-1;
-  ws[_xa(sgPiRow,11)].f = 'SUM(K'+piFirst+':K'+piLast+')';
-
-  // Shared Facilities sub-group
-  var sgCoreRow = r; subgroup(sgCoreRow, 'Shared Facilities'); var coreFirst = r+1; r += 1;
+  // Shared facilities merged in
   S.coreItems.forEach(function(c) {
     if (!c.on) return;
     var rate = (S.cost.coreRates && S.cost.coreRates[c.name]) || 538;
     detail(r, {
-      desc: c.name, nasf: c.nasf,
-      factor: '=$'+DGSF_FACTOR_CELL,
+      desc: c.name + '  (shared)', nasf: c.nasf,
+      factor: '='+DGSF_FACTOR_EXPR,
       gfa: '=ROUND(D'+r+'*E'+r+',0)',
       rate: rate,
       subtotal: '=F'+r+'*H'+r,
@@ -5041,8 +5054,8 @@ function _buildCostSheet(wb, ctx) {
     });
     r += 1;
   });
-  var coreLast = r-1;
-  ws[_xa(sgCoreRow,11)].f = 'SUM(K'+coreFirst+':K'+coreLast+')';
+  var resLast = r-1;
+  ws[_xa(sgResRow,11)].f = 'SUM(K'+resFirst+':K'+resLast+')';
 
   // Non-Research sub-group
   var gfComm = S.gfProgram.filter(function(g){return g.on && g.cat==='community'}).reduce(function(s,g){return s+g.nasf;},0);
@@ -5052,13 +5065,13 @@ function _buildCostSheet(wb, ctx) {
   var gfEvent = S.gfProgram.filter(function(g){return g.on && g.cat==='event'}).reduce(function(s,g){return s+g.nasf;},0);
   var gfSupport = S.gfProgram.filter(function(g){return g.on && g.cat==='support'}).reduce(function(s,g){return s+g.nasf;},0);
 
-  var sgOtherRow = r; subgroup(sgOtherRow, 'Non-Research Program'); var otherFirst = r+1; r += 1;
+  var sgOtherRow = r; subgroup(sgOtherRow, 'Non-Research'); var otherFirst = r+1; r += 1;
   [['Community Spaces', totalComm, S.cost.communityRate, 'GF + upper-floor community'],
    ['Event Spaces',     gfEvent,    S.cost.eventRate,    'Colloquium / Eng Learn'],
    ['Program Support',  gfSupport,  S.cost.supportRate,  'Loading + building support']].forEach(function(o) {
     detail(r, {
       desc:o[0], nasf:o[1],
-      factor:'=$'+DGSF_FACTOR_CELL,
+      factor:'='+DGSF_FACTOR_EXPR,
       gfa:'=ROUND(D'+r+'*E'+r+',0)',
       rate:o[2],
       subtotal:'=F'+r+'*H'+r,
@@ -5069,45 +5082,42 @@ function _buildCostSheet(wb, ctx) {
   var otherLast = r-1;
   ws[_xa(sgOtherRow,11)].f = 'SUM(K'+otherFirst+':K'+otherLast+')';
 
-  // Set Program Fitout band K = sum of 3 sub-group totals
-  var bandK = ws[_xa(bandProgRow,11)];
-  if (bandK) { bandK.f = 'K'+sgPiRow+'+K'+sgCoreRow+'+K'+sgOtherRow; bandK.z='"$"#,##0'; }
-  else _xset(ws, bandProgRow, 11, { f:'K'+sgPiRow+'+K'+sgCoreRow+'+K'+sgOtherRow, z:'"$"#,##0',
-    s:_xstyle({ size:14, bold:true, fill:PROG_C, border:_MED_TOP, halign:'right', valign:'center', indent:1 }) });
+  // Set Program Fitout band K = sum of Research + Non-Research subtotals
+  _xset(ws, bandProgRow, 11, { f:'K'+sgResRow+'+K'+sgOtherRow, z:'"$"#,##0',
+    s:_xstyle({ size:11, bold:true, fill:PROG_C, border:_MED_TOP, halign:'right', valign:'center', indent:1 }) });
 
   rowH(r, 5.25); r += 1;
 
   // 3. Building-Wide Costs band
-  band(r, BW_C, 'Building-Wide Costs  (\u00d7 Total GSF)', true);
-  var bandBwRow = r; r += 1; rowH(r, 6.0); r += 1;
+  band(r, BW_C, 'Building-Wide Costs  (× Total GSF)', true);
+  var bandBwRow = r; r += 1; rowH(r, 5.0); r += 1;
   var bwFirst = r;
   detail(r, { desc:'Core & Shell (structure, enclosure, base MEP)',
     gsf:'=$'+GSF_CELL, rate:S.cost.coreShellRate, subtotal:'=G'+r+'*H'+r,
-    remarks:'Base rate \u00d7 total GSF' }); r += 1;
+    remarks:'Base rate × total GSF' }); r += 1;
   detail(r, { desc:'Site & Demo',
     gsf:'=$'+GSF_CELL, rate:S.cost.siteRate, subtotal:'=G'+r+'*H'+r,
     remarks:'Site work, demolition allowance' }); r += 1;
   var bwLast = r-1;
-  var bwBandK = ws[_xa(bandBwRow,11)];
-  if (bwBandK) { bwBandK.f = 'SUM(K'+bwFirst+':K'+bwLast+')'; bwBandK.z='"$"#,##0'; }
+  _xset(ws, bandBwRow, 11, { f:'SUM(K'+bwFirst+':K'+bwLast+')', z:'"$"#,##0',
+    s:_xstyle({ size:11, bold:true, fill:BW_C, border:_MED_TOP, halign:'right', valign:'center', indent:1 }) });
 
   // Base Construction subtotal row
-  rowH(r, 18.5);
+  rowH(r, 17.0);
   for (var c=4; c<=10; c++) {
-    _xset(ws, r, c, { s:_xstyle({ size:12, bold:true, border:_MED_TOP, valign:'center' }) });
+    _xset(ws, r, c, { s:_xstyle({ size:10, bold:true, border:_MED_TOP, valign:'center' }) });
   }
   _xset(ws, r, 3, { v:'Base Construction (Q4 2025)',
-    s:_xstyle({ size:12, bold:true, border:_MED_TOP, halign:'left', valign:'center', indent:1 }) });
+    s:_xstyle({ size:10, bold:true, border:_MED_TOP, halign:'left', valign:'center', indent:1 }) });
   _xset(ws, r, 11, { f:'K'+bandProgRow+'+K'+bandBwRow, z:'"$"#,##0',
-    s:_xstyle({ size:12, bold:true, border:_MED_TOP, halign:'right', valign:'center', indent:1 }) });
+    s:_xstyle({ size:10, bold:true, border:_MED_TOP, halign:'right', valign:'center', indent:1 }) });
   var baseConstRow = r; r += 2;
 
   // 4. Escalation, Tariff & Soft Costs band
-  band(r, ESC_C, 'Escalation, Tariff & Soft Costs', true); r += 1; rowH(r, 6.0); r += 1;
-  // Escalation
+  band(r, ESC_C, 'Escalation, Tariff & Soft Costs', true); r += 1; rowH(r, 5.0); r += 1;
   var yearsToMid = (S.cost.escalationYear - S.cost.baseYear) + (S.cost.escalationQuarter - S.cost.baseQuarter)/4;
   detail(r, {
-    desc:'Escalation ('+(S.cost.escalationRate*100).toFixed(1)+'% \u00d7 '+yearsToMid.toFixed(2)+' yr)',
+    desc:'Escalation ('+(S.cost.escalationRate*100).toFixed(1)+'% × '+yearsToMid.toFixed(2)+' yr)',
     pct:'=(1+'+S.cost.escalationRate+')^'+yearsToMid+'-1',
     subtotal:'=ROUND(K'+baseConstRow+'*J'+r+',0)',
     remarks:'Compound annual escalation to mid-construction'
@@ -5120,29 +5130,28 @@ function _buildCostSheet(wb, ctx) {
   detail(r, { desc:'Construction Cost (post-tariff)', subtotal:'=K'+escTotalRow+'+K'+tariffRow, remarks:'Sum of escalated + tariff' });
   var postTariffRow = r; r += 1;
   detail(r, { desc:'Soft Costs Multiplier (design, contingency, FF&E)', remarks:'Multiplier applied to post-tariff construction' });
-  // Override J col with multiplier (not a percent)
   _xset(ws, r, 10, { v:S.cost.softMultiplier, z:'0.00',
-    s:_xstyle({ size:11, fill:RATE_FILL, border:_HAIR_B, halign:'right', valign:'center', indent:1 }) });
+    s:_xstyle({ size:10, fill:RATE_FILL, border:_HAIR_B, halign:'right', valign:'center', indent:1 }) });
   var softRow = r; r += 2;
 
   // 5. Total Project Cost band
   band(r, TOT_C, 'Total Project Cost', true);
-  rowH(r, 22.0);
+  rowH(r, 20.0);
   _xset(ws, r, 11, { f:'ROUND(K'+postTariffRow+'*J'+softRow+',0)', z:'"$"#,##0',
-    s:_xstyle({ font:'Arial Black', size:14, fill:TOT_C, border:_MED_TOP, halign:'right', valign:'center', indent:1 }) });
+    s:_xstyle({ font:'Arial Black', size:12, fill:TOT_C, border:_MED_TOP, halign:'right', valign:'center', indent:1 }) });
   var grandRow = r; r += 1;
-  rowH(r, 14.5);
-  _xset(ws, r, 3,  { v:'Project Cost / GSF', s:_xstyle({ size:11, border:_HAIR_B, halign:'left', valign:'center', indent:1 }) });
+  rowH(r, 13.5);
+  _xset(ws, r, 3,  { v:'Project Cost / GSF', s:_xstyle({ size:10, border:_HAIR_B, halign:'left', valign:'center', indent:1 }) });
   _xset(ws, r, 11, { f:'ROUND(K'+grandRow+'/'+GSF_CELL+',0)', z:'"$"#,##0',
-    s:_xstyle({ size:12, bold:true, border:_HAIR_B, halign:'right', valign:'center', indent:1 }) });
+    s:_xstyle({ size:10, bold:true, border:_HAIR_B, halign:'right', valign:'center', indent:1 }) });
   r += 2;
 
   // Footer
-  rowH(r, 14);
+  rowH(r, 13);
   _xset(ws, r, 2, { v:'Yellow cells = $/SF rates and percentages (editable).  Teal cells = structural inputs (editable).  All other figures recompute automatically.',
     s:_xstyle({ size:8, italic:true, color:'888780', halign:'left', valign:'center', indent:1 }) });
   ws['!merges'].push({ s:{r:r-1,c:1}, e:{r:r-1,c:11} }); r += 1;
-  rowH(r, 14);
+  rowH(r, 13);
   _xset(ws, r, 2, { v:'Base rates: Q4 2025, Evanston IL, CMAR delivery.  NASF on each line is editable.',
     s:_xstyle({ size:8, italic:true, color:'888780', halign:'left', valign:'center', indent:1 }) });
   ws['!merges'].push({ s:{r:r-1,c:1}, e:{r:r-1,c:11} });
@@ -5284,52 +5293,137 @@ function _legacyExportXLSXStub() {
   XLSX.utils.book_append_sheet(wb, ws6, 'Energy');
 
   // --- Sheet 7: Cost ---
+  // v0.5.71+: Matches the on-screen Cost tab table. Two groups only —
+  // Research (PI typologies + Shared Facilities merged) and Non-Research.
+  // Summary metrics shown at top: GSF, NASF, DGSF, %DGSF/GSF, Net-to-Gross %.
   var cc = d.cost;
+
+  // Recompute pro-rata circulation and building support exactly like the
+  // on-screen Cost Detail table (renderCost)
+  var _fs = (S.floorStacking || {});
+  var _circPct = (_fs.circulation_pct_global != null) ? _fs.circulation_pct_global : 0.18;
+  var _bsPct   = (_fs.building_support_pct_global != null) ? _fs.building_support_pct_global : 0.05;
+  var _nasfShare = Math.max(0.01, 1 - _circPct - _bsPct);
+  var _sumProgNASF = 0;
+  cc.progLines.forEach(function(p){ _sumProgNASF += (p.nasf || 0); });
+  function _enrich(p) {
+    var nasf = p.nasf || 0;
+    var pctOfTotal = _sumProgNASF > 0 ? (nasf / _sumProgNASF) : 0;
+    var proRataCirc = Math.round(nasf * _circPct / _nasfShare);
+    var dgsfNew = nasf + proRataCirc;
+    var bldgSup = Math.round(nasf * _bsPct / _nasfShare);
+    var gfaNew  = dgsfNew + bldgSup;
+    var rateDGSF = p.rate || 0;
+    var fitoutCost = Math.round(dgsfNew * rateDGSF);
+    return { pctOfTotal:pctOfTotal, proRataCirc:proRataCirc, dgsfNew:dgsfNew,
+             bldgSup:bldgSup, gfaNew:gfaNew, rateDGSF:rateDGSF, fitoutCost:fitoutCost };
+  }
+  cc.progLines.forEach(function(p){ p._calc7 = _enrich(p); });
+
+  // Net-to-Gross expressed as percentage (DGSF/NASF - 1) -> e.g. 0.557 = "56%"
+  var _netToGrossPct = (d.totalNASF > 0) ? (cc.dgsf / d.totalNASF - 1) : 0;
+  var _dgsfOverGsf   = (d.totalGSF > 0) ? (cc.dgsf / d.totalGSF) : 0;
+
   var costRows = [
-    ['Cost Model — DGSF Basis'],
+    ['Cost Model — Research vs Non-Research'],
     [''],
-    ['DGSF MODEL'],
+    ['SUMMARY METRICS'],
     ['Metric', 'Value'],
     ['Total GSF', d.totalGSF],
-    ['Dept. Gross %', (S.deptGrossPct*100).toFixed(0) + '%'],
+    ['Total NASF', d.totalNASF],
     ['Total DGSF', cc.dgsf],
-    ['MEP/Shell GSF', cc.mepGSF],
-    ['NASF-to-DGSF Factor', cc.dgsfFactor.toFixed(3)],
+    ['DGSF / GSF', (_dgsfOverGsf*100).toFixed(1) + '%'],
+    ['Net-to-Gross (DGSF inflation over NASF)', (_netToGrossPct*100).toFixed(1) + '%'],
     [],
     ['PROGRAM FIT-OUT (DGSF Basis)'],
-    ['Category', 'NASF', 'DGSF', '$/DGSF', 'Cost'],
+    ['Program Category', 'NASF', '% Total', 'Pro Rata Circ', 'DGSF', '$/DGSF', 'Cost', 'Bldg Sup', 'GFA'],
     [],
-    ['RESEARCH — PI TYPOLOGIES'],
+    ['RESEARCH'],
   ];
-  cc.progLines.filter(function(p){return p.group==='research'}).forEach(function(p) {
-    costRows.push([p.cat, p.nasf, p.dgsf, p.rate, Math.round(p.cost)]);
+
+  // Research = PI typologies + Shared Facilities (merged, no separate group)
+  var _resLines = cc.progLines.filter(function(p){ return p.group==='research' || p.group==='core'; });
+  var _resTotals = { nasf:0, circ:0, dgsf:0, bs:0, gfa:0, cost:0 };
+  _resLines.forEach(function(p) {
+    var e = p._calc7;
+    var label = p.cat + (p.group==='core' ? '  (shared)' : '');
+    var pct = _sumProgNASF > 0 ? ((p.nasf/_sumProgNASF)*100).toFixed(1) + '%' : '';
+    costRows.push([label, p.nasf, pct, e.proRataCirc, e.dgsfNew, e.rateDGSF, e.fitoutCost, e.bldgSup, e.gfaNew]);
+    _resTotals.nasf += p.nasf; _resTotals.circ += e.proRataCirc; _resTotals.dgsf += e.dgsfNew;
+    _resTotals.bs += e.bldgSup; _resTotals.gfa += e.gfaNew; _resTotals.cost += e.fitoutCost;
   });
+  costRows.push(['Subtotal: Research',
+    _resTotals.nasf,
+    _sumProgNASF > 0 ? ((_resTotals.nasf/_sumProgNASF)*100).toFixed(1) + '%' : '',
+    _resTotals.circ, _resTotals.dgsf, '', _resTotals.cost, _resTotals.bs, _resTotals.gfa]);
+
   costRows.push([]);
-  costRows.push(['SHARED FACILITIES']);
-  cc.progLines.filter(function(p){return p.group==='core'}).forEach(function(p) {
-    costRows.push([p.cat, p.nasf, p.dgsf, p.rate, Math.round(p.cost)]);
+  costRows.push(['NON-RESEARCH']);
+  var _otherLines = cc.progLines.filter(function(p){ return p.group==='other'; });
+  var _othTotals = { nasf:0, circ:0, dgsf:0, bs:0, gfa:0, cost:0 };
+  _otherLines.forEach(function(p) {
+    var e = p._calc7;
+    var pct = _sumProgNASF > 0 ? ((p.nasf/_sumProgNASF)*100).toFixed(1) + '%' : '';
+    costRows.push([p.cat, p.nasf, pct, e.proRataCirc, e.dgsfNew, e.rateDGSF, e.fitoutCost, e.bldgSup, e.gfaNew]);
+    _othTotals.nasf += p.nasf; _othTotals.circ += e.proRataCirc; _othTotals.dgsf += e.dgsfNew;
+    _othTotals.bs += e.bldgSup; _othTotals.gfa += e.gfaNew; _othTotals.cost += e.fitoutCost;
   });
+  costRows.push(['Subtotal: Non-Research',
+    _othTotals.nasf,
+    _sumProgNASF > 0 ? ((_othTotals.nasf/_sumProgNASF)*100).toFixed(1) + '%' : '',
+    _othTotals.circ, _othTotals.dgsf, '', _othTotals.cost, _othTotals.bs, _othTotals.gfa]);
+
+  var _fitoutAll = _resTotals.cost + _othTotals.cost;
   costRows.push([]);
-  costRows.push(['NON-RESEARCH PROGRAM']);
-  cc.progLines.filter(function(p){return p.group==='other'}).forEach(function(p) {
-    costRows.push([p.cat, p.nasf, p.dgsf, p.rate, Math.round(p.cost)]);
-  });
-  costRows.push(['Fit-Out Total', '', '', '', Math.round(cc.totalFitout)]);
+  costRows.push(['Fitout Total', _resTotals.nasf + _othTotals.nasf, '100%',
+                 _resTotals.circ + _othTotals.circ,
+                 _resTotals.dgsf + _othTotals.dgsf, '',
+                 _fitoutAll,
+                 _resTotals.bs + _othTotals.bs,
+                 _resTotals.gfa + _othTotals.gfa]);
+
   costRows.push([]);
-  costRows.push(['CORE & SHELL']);
-  costRows.push(['MEP/Infrastructure', cc.mepGSF, '', S.cost.shellRate, Math.round(cc.totalShell)]);
+  costRows.push(['CORE & SHELL + SITE (Total GSF basis)']);
+  costRows.push(['Core & Shell', d.totalGSF, '', '', '', S.cost.coreShellRate, Math.round(cc.totalCoreShell), '', '']);
+  costRows.push(['Site & Demo',  d.totalGSF, '', '', '', S.cost.siteRate,      Math.round(cc.totalSite),      '', '']);
   costRows.push([]);
-  costRows = costRows.concat([
-    ['SUMMARY'],
-    ['Base Construction Cost', '', '', '', Math.round(cc.constructionCost)],
-    ['Escalation (' + (cc.yearsToMid).toFixed(2) + ' yr @ ' + (S.cost.escalationRate*100).toFixed(1) + '%)', '', '', '', Math.round(cc.escalatedConstruction - cc.constructionCost)],
-    ['Escalated Construction', '', '', '', Math.round(cc.escalatedConstruction)],
-    ['Soft Costs (' + ((S.cost.softMultiplier-1)*100).toFixed(0) + '%)', '', '', '', Math.round(cc.escalatedConstruction * (S.cost.softMultiplier-1))],
-    ['Total Project Cost', '', '', '', Math.round(cc.projectCost)],
-    ['Cost per GSF (Project)', '', '', '', Math.round(cc.costPerGSF)],
-  ]);
+
+  costRows.push(['SUMMARY']);
+  costRows.push(['Base Construction Cost',            '', '', '', '', '', Math.round(cc.constructionCost)]);
+  costRows.push(['Escalation (' + cc.yearsToMid.toFixed(2) + ' yr @ ' + (S.cost.escalationRate*100).toFixed(1) + '%)',
+                 '', '', '', '', '', Math.round(cc.escalatedConstruction - cc.constructionCost)]);
+  costRows.push(['Escalated Construction',            '', '', '', '', '', Math.round(cc.escalatedConstruction)]);
+  costRows.push(['Soft Costs (' + ((S.cost.softMultiplier-1)*100).toFixed(0) + '%)',
+                 '', '', '', '', '', Math.round(cc.escalatedConstruction * (S.cost.softMultiplier-1))]);
+  costRows.push(['Total Project Cost',                '', '', '', '', '', Math.round(cc.projectCost)]);
+  costRows.push(['Cost per GSF (Project)',            '', '', '', '', '', Math.round(cc.costPerGSF)]);
+
   var ws7 = XLSX.utils.aoa_to_sheet(costRows);
-  ws7['!cols'] = [{wch:30},{wch:12},{wch:12},{wch:12},{wch:16}];
+
+  // Narrower columns, centered headings, smaller font.
+  ws7['!cols'] = [{wch:32},{wch:10},{wch:8},{wch:11},{wch:10},{wch:8},{wch:13},{wch:9},{wch:10}];
+
+  // Style: center the column-heading row (the row that contains "Program Category")
+  // Find that row index in the costRows array (1-indexed for Excel)
+  for (var __r = 0; __r < costRows.length; __r++) {
+    if (costRows[__r] && costRows[__r][0] === 'Program Category') {
+      var __excelRow = __r + 1;
+      for (var __c = 0; __c < 9; __c++) {
+        var __addr = XLSX.utils.encode_cell({ r: __excelRow - 1, c: __c });
+        if (ws7[__addr]) {
+          ws7[__addr].s = { font: { bold:true, sz:10 }, alignment: { horizontal:'center', vertical:'center', wrapText:true } };
+        }
+      }
+      break;
+    }
+  }
+  // Smaller font on all body cells, headings bold
+  for (var __k in ws7) {
+    if (__k[0] === '!') continue;
+    if (!ws7[__k].s) ws7[__k].s = {};
+    if (!ws7[__k].s.font) ws7[__k].s.font = {};
+    if (!ws7[__k].s.font.sz) ws7[__k].s.font.sz = 10;
+  }
   XLSX.utils.book_append_sheet(wb, ws7, 'Cost');
 
   // --- Download ---
