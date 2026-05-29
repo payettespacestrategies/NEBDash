@@ -6887,6 +6887,19 @@ if (typeof renderMEP === 'function') {
     pop.style.left = (window.scrollX + rect.left) + 'px';
     pop.style.top  = (window.scrollY + rect.bottom + 4) + 'px';
     function isOn(k, oid){ return (lab.categories||[]).some(function(c){return c.kind===k && c.id===oid;}); }
+    // v0.5.48: build an index of "which OTHER card already owns this category"
+    // so we can grey out duplicates in the popover. Same-card bindings stay
+    // active so the user can still uncheck.
+    function ownerOf(k, oid) {
+      for (var i = 0; i < (S.mepLabs||[]).length; i++) {
+        var other = S.mepLabs[i];
+        if (other.id === lab.id) continue;
+        if ((other.categories||[]).some(function(c){ return c.kind===k && c.id===oid; })) {
+          return other.name || other.id;
+        }
+      }
+      return null;
+    }
     var html = '';
     [
       { title:'PI Typology (Lab)',  kind:'type',   opts:_typeOpts(),  single:true  },
@@ -6899,13 +6912,24 @@ if (typeof renderMEP === 'function') {
            +  '</span></div>';
       if (!g.opts.length) html += '<div style="color:#7E848B;font-style:italic;padding:2px 4px">None defined yet.</div>';
       g.opts.forEach(function(o){
-        var checked = isOn(g.kind, o.id) ? ' checked' : '';
+        var on    = isOn(g.kind, o.id);
+        var owner = on ? null : ownerOf(g.kind, o.id);
+        var taken = !!owner;
+        var checked = on ? ' checked' : '';
+        var disabled = taken ? ' disabled' : '';
         var safeId = (o.id+'').replace(/"/g,'&quot;');
-        html += '<label><input type="'+(g.single?'radio':'checkbox')+'"'
+        var rowStyle = taken
+          ? 'opacity:.45;cursor:not-allowed'
+          : '';
+        var rowTitle = taken ? ' title="Already on: '+owner.replace(/"/g,'&quot;')+' — uncheck there first"' : '';
+        html += '<label style="'+rowStyle+'"'+rowTitle+'>'
+             +  '<input type="'+(g.single?'radio':'checkbox')+'"'
              +  (g.single ? ' name="catgrp_'+g.kind+'_'+id+'"' : '')
-             +  ' data-kind="'+g.kind+'" data-id="'+safeId+'" data-single="'+(g.single?1:0)+'"'+checked+'>'
+             +  ' data-kind="'+g.kind+'" data-id="'+safeId+'" data-single="'+(g.single?1:0)+'"'+checked+disabled+'>'
              +  '<span style="display:inline-block;width:10px;height:10px;background:'+(o.color||'#ccc')+';border-radius:2px"></span>'
-             +  o.label+'</label>';
+             +  o.label
+             +  (taken ? '<span style="margin-left:auto;font-size:9px;color:#7E848B;font-style:italic;font-weight:400">on: '+owner+'</span>' : '')
+             +  '</label>';
       });
     });
     html += '<div style="display:flex;justify-content:flex-end;margin-top:10px">'
