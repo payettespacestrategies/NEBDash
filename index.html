@@ -7004,15 +7004,81 @@ if (typeof renderMEP === 'function') {
       + '</div>';
   }
 
-  // v0.5.46: Recompute lab.nsf from the linked program category so loads
-  // scale automatically when PI counts / per-FTE areas change. Type-bound
-  // cards mirror (groupOpenLab + groupLabSupport) × pis; core-bound cards
-  // mirror coreItem.nasf; non-lab cards keep whatever value the user has set
-  // (we don't try to infer office / community NSF from program here — too
-  // tab-dependent). Multi-category cards sum across all matching sources.
+  // v0.5.47: program-source map per system category. Categories listed in
+  // _SOURCED_SYS get their NSF auto-summed from program; the rest (admin,
+  // restrooms, mech, computational, loading) have no obvious program source
+  // and keep whatever the user typed on the card. Returns NSF for one cat id.
+  // Mapping rules (built from the loaded JSON's gfProgram + upperCommunity
+  // taxonomy — adjust here if new cats are added on those tabs):
+  //   mep_office       = Σ PI desks (groupDesk × pis) + Σ faculty/flex office
+  //                      (groupOffice × pis) + gf items cat='office_enclosed' or 'office'
+  //                      + upperCommunity items cat='office_enclosed' or 'office'
+  //   mep_events       = gf items cat='event'
+  //   mep_community    = gf + upperCommunity items cat='community'
+  //   mep_collaboration = gf + upperCommunity items cat='collaboration'
+  //   mep_bldgsupport  = gf items cat='support' + programSupport.items
+  //   mep_circulation  = circulation_pct_global × totalNASF
+  //   (other system cats — no source; left at user NSF.)
+  var _SOURCED_SYS = {
+    mep_office:1, mep_events:1, mep_community:1, mep_collaboration:1,
+    mep_bldgsupport:1, mep_circulation:1, mep_learning:1
+  };
+  function _skillProgramNsfForSystem(catId, d) {
+    if (!d) return 0;
+    var sum = 0;
+    if (catId === 'mep_office') {
+      (d.types||[]).forEach(function(t){
+        sum += (+t.groupDesk   || 0) * (+t.pis || 0);
+        sum += (+t.groupOffice || 0) * (+t.pis || 0);
+      });
+      (S.gfProgram||[]).forEach(function(it){
+        if (it.on && (it.cat === 'office_enclosed' || it.cat === 'office')) sum += +it.nasf || 0;
+      });
+      (S.upperCommunity||[]).forEach(function(it){
+        if (it.on && (it.cat === 'office_enclosed' || it.cat === 'office')) sum += +it.nasf || 0;
+      });
+      return Math.round(sum);
+    }
+    if (catId === 'mep_events' || catId === 'mep_learning') {
+      var match = catId === 'mep_events' ? 'event' : 'learning';
+      (S.gfProgram||[]).forEach(function(it){
+        if (it.on && it.cat === match) sum += +it.nasf || 0;
+      });
+      return Math.round(sum);
+    }
+    if (catId === 'mep_community' || catId === 'mep_collaboration') {
+      var match = catId === 'mep_community' ? 'community' : 'collaboration';
+      (S.gfProgram||[]).forEach(function(it){
+        if (it.on && it.cat === match) sum += +it.nasf || 0;
+      });
+      (S.upperCommunity||[]).forEach(function(it){
+        if (it.on && it.cat === match) sum += +it.nasf || 0;
+      });
+      return Math.round(sum);
+    }
+    if (catId === 'mep_bldgsupport') {
+      (S.gfProgram||[]).forEach(function(it){
+        if (it.on && it.cat === 'support') sum += +it.nasf || 0;
+      });
+      var psItems = (S.programSupport && S.programSupport.items) || [];
+      psItems.forEach(function(it){ if (it.on) sum += +it.nasf || 0; });
+      return Math.round(sum);
+    }
+    if (catId === 'mep_circulation') {
+      var pct = (S.floorStacking && +S.floorStacking.circulation_pct_global) || 0;
+      return Math.round(pct * (+d.totalNASF || 0));
+    }
+    return 0;
+  }
+
+  // v0.5.47: recompute lab.nsf from the linked program. Type cards mirror
+  // typology lab area, core cards mirror shared lab NASF, system cards with
+  // a known program source mirror the program total for that category.
+  // Cards bound only to UNSOURCED categories keep manual NSF (so the user
+  // can hand-size Restrooms / Mech / Admin).
   function _skillSyncMepNsf(d) {
     if (!d || !Array.isArray(S.mepLabs)) return;
-    var typeArea = {};   // typology id → lab+support NSF in current program
+    var typeArea = {};
     (d.types || []).forEach(function(t) {
       var area = (+t.groupOpenLab || 0) + (+t.groupLabSupport || 0);
       typeArea[t.id] = Math.round(area * (+t.pis || 0));
@@ -7023,15 +7089,131 @@ if (typeof renderMEP === 'function') {
     });
     S.mepLabs.forEach(function(l) {
       var cats = l.categories || [];
-      var anyLabBound = cats.some(function(c){ return c.kind==='type' || c.kind==='core'; });
-      if (!anyLabBound) return;  // non-lab cards keep user-set NSF
-      var sum = 0;
+      if (!cats.length) { l._nsfSynced = false; return; }
+      var sum = 0, anySync = false;
       cats.forEach(function(c) {
-        if      (c.kind === 'type' && typeArea[c.id] != null) sum += typeArea[c.id];
-        else if (c.kind === 'core' && coreArea[c.id] != null) sum += coreArea[c.id];
+        if      (c.kind === 'type' && typeArea[c.id] != null)          { sum += typeArea[c.id]; anySync = true; }
+        else if (c.kind === 'core' && coreArea[c.id] != null)          { sum += coreArea[c.id]; anySync = true; }
+        else if (c.kind === 'system' && _SOURCED_SYS[c.id])            { sum += _skillProgramNsfForSystem(c.id, d); anySync = true; }
       });
-      if (sum > 0) l.nsf = sum;
+      if (anySync) { l.nsf = sum; l._nsfSynced = true; }
+      else l._nsfSynced = false;
     });
+  }
+
+  // v0.5.47: Coverage panel rendered at the bottom of the Technical Criteria
+  // tab. Shows Σ Tech Crit NSF vs Σ Program NASF, and a per-bucket breakdown
+  // of which program areas are accounted for by a card.
+  function _skillRenderCoveragePanel(d) {
+    if (!d) return '';
+    // Program buckets (computed independent of cards so the panel acts as
+    // a source-of-truth comparison).
+    var labArea = 0, deskArea = 0, officeArea = 0;
+    (d.types||[]).forEach(function(t){
+      labArea    += ((+t.groupOpenLab||0) + (+t.groupLabSupport||0)) * (+t.pis||0);
+      deskArea   += (+t.groupDesk||0)   * (+t.pis||0);
+      officeArea += (+t.groupOffice||0) * (+t.pis||0);
+    });
+    var coreOn = 0;
+    (S.coreItems||[]).forEach(function(c){ if (c.on) coreOn += +c.nasf||0; });
+    function gfSum(cat) {
+      var s = 0;
+      (S.gfProgram||[]).forEach(function(it){ if (it.on && it.cat===cat) s += +it.nasf||0; });
+      return s;
+    }
+    function ucSum(cat) {
+      var s = 0;
+      (S.upperCommunity||[]).forEach(function(it){ if (it.on && it.cat===cat) s += +it.nasf||0; });
+      return s;
+    }
+    var gfOffice = gfSum('office_enclosed') + gfSum('office');
+    var ucOffice = ucSum('office_enclosed') + ucSum('office');
+    var gfEvent  = gfSum('event');
+    var gfLearn  = gfSum('learning');
+    var gfCommun = gfSum('community');
+    var ucCommun = ucSum('community');
+    var gfCollab = gfSum('collaboration');
+    var ucCollab = ucSum('collaboration');
+    var gfSupport = gfSum('support');
+    var psSupport = 0;
+    var psItems = (S.programSupport && S.programSupport.items) || [];
+    psItems.forEach(function(it){ if (it.on) psSupport += +it.nasf||0; });
+    var circ = Math.round(((S.floorStacking && +S.floorStacking.circulation_pct_global) || 0) * (+d.totalNASF||0));
+
+    // Coverage by category — which Tech Crit card holds each bucket
+    function cardsFor(kind, id) {
+      return (S.mepLabs||[]).filter(function(l){
+        return (l.categories||[]).some(function(c){ return c.kind===kind && c.id===id; });
+      }).map(function(l){ return l.name; });
+    }
+    function row(label, programNSF, cards, source) {
+      var coveredCls = cards.length ? 'cov-ok' : 'cov-miss';
+      var cardStr = cards.length ? cards.join(', ') : '<i>no card</i>';
+      return '<tr class="'+coveredCls+'">'+
+        '<td>'+label+'</td>'+
+        '<td style="text-align:right;font-family:DM Mono,monospace">'+F(programNSF)+'</td>'+
+        '<td>'+cardStr+'</td>'+
+        '<td style="font-size:10px;color:#5A5F66">'+source+'</td>'+
+        '</tr>';
+    }
+
+    // Type cards row-by-row
+    var typeRows = '';
+    (d.types||[]).forEach(function(t){
+      if (!t.pis) return;
+      var area = ((+t.groupOpenLab||0) + (+t.groupLabSupport||0)) * t.pis;
+      typeRows += row(t.label+' lab', area, cardsFor('type', t.id), 'PI Mix × per-FTE');
+    });
+
+    var rows = typeRows
+      + row('PI desks (all typologies)',           deskArea,  cardsFor('system','mep_office'), 'PI Typology × deskPerFTE × pis')
+      + row('PI faculty + flex offices',           officeArea, cardsFor('system','mep_office'), 'PI Typology × (faculty+flex) × pis')
+      + row('Shared Labs (active core items)',     coreOn,    [].concat.apply([], (S.coreItems||[]).filter(function(c){return c.on;}).map(function(c){return cardsFor('core', c.name);})), 'coreItems on=true')
+      + row('Ground Floor enclosed offices',       gfOffice,  cardsFor('system','mep_office'), 'gfProgram cat=office_enclosed')
+      + row('Upper Floor offices',                 ucOffice,  cardsFor('system','mep_office'), 'upperCommunity cat=office_enclosed')
+      + row('Ground Floor events / classrooms',    gfEvent,   cardsFor('system','mep_events'),  'gfProgram cat=event')
+      + (gfLearn ? row('Ground Floor learning',    gfLearn,   cardsFor('system','mep_learning'), 'gfProgram cat=learning') : '')
+      + row('Community (GF + Upper)',              gfCommun+ucCommun, cardsFor('system','mep_community'), 'cat=community')
+      + row('Collaboration (GF + Upper)',          gfCollab+ucCollab, cardsFor('system','mep_collaboration'), 'cat=collaboration')
+      + row('Support + Program Support',           gfSupport+psSupport, cardsFor('system','mep_bldgsupport'), 'cat=support + programSupport')
+      + row('Circulation (derived)',               circ,       cardsFor('system','mep_circulation'), 'circ_pct × totalNASF');
+
+    var sumProgram = labArea + deskArea + officeArea + coreOn + gfOffice + ucOffice
+      + gfEvent + gfLearn + gfCommun + ucCommun + gfCollab + ucCollab
+      + gfSupport + psSupport + circ;
+    var sumCards = 0;
+    (S.mepLabs||[]).forEach(function(l){ sumCards += +l.nsf || 0; });
+    var delta = sumProgram - sumCards;
+    var deltaCls = (Math.abs(delta) < Math.max(500, sumProgram*0.02)) ? 'c-teal' : 'c-coral';
+
+    return '<style>'+
+      '.mep-cov{margin:20px 32px 32px;background:#fff;border-radius:12px;box-shadow:0 1px 3px rgba(0,0,0,.06);padding:18px 22px;font-family:Sora,sans-serif}'+
+      '.mep-cov h2{font-size:14px;font-weight:700;margin:0 0 12px;color:#0D47A1;letter-spacing:.04em;text-transform:uppercase}'+
+      '.mep-cov .cov-totals{display:flex;gap:24px;margin-bottom:14px;flex-wrap:wrap}'+
+      '.mep-cov .cov-stat{flex:0 0 auto}'+
+      '.mep-cov .cov-stat .v{font-size:22px;font-weight:700;color:#1B3A5C;font-family:DM Mono,monospace}'+
+      '.mep-cov .cov-stat .v.c-teal{color:#2BA89B} .mep-cov .cov-stat .v.c-coral{color:#D14A3D}'+
+      '.mep-cov .cov-stat .l{font-size:10px;color:#5A5F66;letter-spacing:.04em;text-transform:uppercase;margin-top:2px}'+
+      '.mep-cov table{width:100%;border-collapse:collapse;font-size:11px}'+
+      '.mep-cov th{text-align:left;padding:6px 8px;border-bottom:1px solid #C2C3C8;font-size:10px;text-transform:uppercase;letter-spacing:.04em;color:#5A5F66}'+
+      '.mep-cov td{padding:5px 8px;border-bottom:1px solid #EEF0F3;vertical-align:top}'+
+      '.mep-cov tr.cov-miss td{background:#FFF7E6}'+
+      '.mep-cov tr.cov-miss td:first-child{font-weight:700;color:#7A5B00}'+
+      '.mep-cov tr.cov-ok td:first-child{color:#1B3A5C}'+
+      '.mep-cov .cov-note{font-size:10px;color:#5A5F66;margin-top:10px;line-height:1.5}'+
+      '</style>'+
+      '<div class="mep-cov">'+
+        '<h2>Program ↔ Technical Criteria Coverage</h2>'+
+        '<div class="cov-totals">'+
+          '<div class="cov-stat"><div class="v">'+F(Math.round(sumProgram))+'</div><div class="l">Σ Program NSF (bucketed)</div></div>'+
+          '<div class="cov-stat"><div class="v">'+F(Math.round(sumCards))+'</div><div class="l">Σ Tech Crit Cards NSF</div></div>'+
+          '<div class="cov-stat"><div class="v '+deltaCls+'">'+(delta>=0?'+':'')+F(Math.round(delta))+'</div><div class="l">Delta (Program − Cards)</div></div>'+
+          '<div class="cov-stat"><div class="v">'+F(d.totalNASF||0)+'</div><div class="l">Building Total NASF</div></div>'+
+        '</div>'+
+        '<table><thead><tr><th>Program Bucket</th><th style="text-align:right">NSF</th><th>Covered by Card</th><th>Source</th></tr></thead>'+
+        '<tbody>'+rows+'</tbody></table>'+
+        '<div class="cov-note">Yellow rows = no Tech Crit card carries that NSF. Add the missing category via <b>+ Program</b> on a card. NSF on lab + system-sourced cards is auto-summed from the program (locked) — change the source on the PI Typologies, Basement &amp; Shared, Academic Space, or Program Support tabs and the card updates here.</div>'+
+      '</div>';
   }
 
   // ---- override renderMEP: name resync + single toggle next to + Add -------
@@ -7053,6 +7235,12 @@ if (typeof renderMEP === 'function') {
         '<button onclick="_skillAddMepLab()"',
         toggleBtn + '<button onclick="_skillAddMepLab()"'
       );
+      // v0.5.47: Coverage panel injected at the bottom of the tab (just
+      // before the closing </div> of .mep-tab).
+      try {
+        var panel = _skillRenderCoveragePanel(d);
+        if (panel) html = html.replace(/<\/div>\s*$/, panel + '</div>');
+      } catch(e) { console.warn('coverage panel failed:', e); }
       return html;
     };
   }
