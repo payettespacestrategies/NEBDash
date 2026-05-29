@@ -964,21 +964,28 @@ function switchTab(i) { activeTab = i; render(); }
 // METRICS STRIP
 // ============================================================
 function renderMetrics(d) {
+  // v0.5.46: simplified header — Total GSF, active scenario name, Total NASF.
+  // The other metrics (Efficiency, PI counts, EUI, cost, surplus) are still
+  // visible inside their respective tabs (Fundamentals, PI Mix, Energy, Cost,
+  // Scenarios). Pulling them off the strip keeps the at-a-glance bar focused
+  // on the three numbers that define the scenario being inspected.
+  var scName = '—';
+  if (S.scenarios && S.activeScenario != null && S.scenarios[S.activeScenario]) {
+    scName = S.scenarios[S.activeScenario].name || '—';
+  }
   var items = [
-    { v:F(d.totalGSF), l:'Total GSF' },
-    { v:F(d.totalNASF), l:'Total NASF' },
-    { v:P(d.overallEff), l:'Efficiency' },
-    { v:d.totalPIs, l:'Total PIs' },
-    { v:F(d.piNASF), l:'Research NASF' },
-    { v:F(d.coreNASF), l:'Shared NASF' },
-    { v:F(d.communityNASFActual), l:'Community NASF' },
-    { v:(d.surplus>=0?'+':'')+F(d.surplus), l:'Surplus / Deficit' },
-    { v:F(Math.round(d.buildingEUI)), l:'kBTU/SF (EUI)' },
-    { v:FMM(d.cost.projectCost), l:'Project Cost' },
+    { v:F(d.totalGSF),  l:'Total GSF' },
+    { v:scName,         l:'Active Scenario', isText:true },
+    { v:F(d.totalNASF), l:'Total NASF' }
   ];
   var h = '';
   items.forEach(function(m) {
-    h += '<div class="m"><div class="mv">'+m.v+'</div><div class="ml">'+m.l+'</div></div>';
+    var s = String(m.v);
+    // Shrink long scenario names so they fit without overflowing the card.
+    var inlineStyle = m.isText
+      ? ('font-size:' + (s.length > 24 ? '1.0rem' : s.length > 14 ? '1.3rem' : '1.8rem') + ';line-height:1.15;')
+      : '';
+    h += '<div class="m"><div class="mv" style="'+inlineStyle+'">'+s+'</div><div class="ml">'+m.l+'</div></div>';
   });
   document.getElementById('metrics').innerHTML = h;
 }
@@ -6138,8 +6145,21 @@ function mepCard(lab) {
         // scratch field — storage key (lab.hvac.pressure) unchanged so prior
         // values still surface.
         mepField('HVAC Notes',                  lab.hvac.pressure)+
+        // v0.5.46: Process CW (process cooling/chilled water spec) — free-text
+        // so user can write "55°F loop, 50 GPM" or whatever fits.
+        mepField('Process CW',                  (lab.hvac.process_cw != null ? lab.hvac.process_cw : 'TBD'))+
         mepField('Filtration',                  lab.hvac.filtration)+
-        mepNumField('Fume Hoods',               lab.hvac.fumehoods_per_pi, 'per PI')+
+        // v0.5.46: Fume Hoods retains its storage key (fumehoods_per_pi) but
+        // the unit text reflects lab.hvac.fume_hood_basis — click the unit to
+        // toggle between "per PI" and "per 1,000 SF". Hood Width + Sash Open
+        // feed the derived Hood Exhaust row below.
+        mepNumField('Fume Hoods',               lab.hvac.fumehoods_per_pi,
+          ((lab.hvac.fume_hood_basis === 'ksf') ? 'per 1,000 SF' : 'per PI'))+
+        mepNumField('Hood Width',               (lab.hvac.fume_hood_width_ft != null ? lab.hvac.fume_hood_width_ft : '6'),  'ft')+
+        mepNumField('Sash Opening',             (lab.hvac.fume_hood_sash_in   != null ? lab.hvac.fume_hood_sash_in   : '18'), 'in')+
+        // Computed: Total hoods × per-hood CFM = exhaust CFM at the entered
+        // sash opening. Per-hood CFM = width × (sash/12) × 100 fpm.
+        (typeof _skillRenderHoodCFMRow === 'function' ? _skillRenderHoodCFMRow(lab) : '')+
       '</div>'+
       '<div class="mep-section"><div class="sec-label">Thermal &nbsp;<span style="font-weight:400;color:#AAA;font-size:9px">TEMP &nbsp; RH</span></div>'+
         mepThermalRow('Summer Setpoint', lab.thermal.temp_summer, lab.thermal.rh_summer)+
@@ -6172,15 +6192,23 @@ function mepCard(lab) {
 }
 
 function renderMEP(d) {
-  var sumKW = 0, sumElecT = 0, sumVentT = 0, sumProcT = 0;
+  var sumKW = 0, sumElecT = 0, sumVentT = 0, sumProcT = 0, sumCFM = 0, sumNSF = 0;
   mepLabs.forEach(function(l){
     var ld = mepCalcLoads(l);
     sumKW    += ld.elecKW    || 0;
     sumElecT += ld.elecTons  || 0;
     sumVentT += ld.ventTons  || 0;
     sumProcT += ld.procTons  || 0;
+    // v0.5.46: total supply air CFM = ACH × volume / 60 (same volume the
+    // ventilation-load formula uses). Same units across all card types so
+    // it's safe to sum.
+    var ach = parseFloat(l.hvac && l.hvac.ach_occ);
+    if (!isNaN(ach) && l.nsf) sumCFM += (ach * l.nsf * MEP_CEILING_FT) / 60;
+    sumNSF += +l.nsf || 0;
   });
   var sumTotal = sumElecT + sumVentT + sumProcT;
+  var cfmPerGSF = (d && d.totalGSF > 0) ? sumCFM / d.totalGSF : 0;
+  var cfmPerNSF = sumNSF > 0 ? sumCFM / sumNSF : 0;
 
   var h = '<div class="mep-tab">';
   h += '<div class="mep-page-header">'+
@@ -6189,18 +6217,54 @@ function renderMEP(d) {
        '</div>';
 
   h += '<div class="summary-strip">'+
-       '<div class="strip-cell"><div class="s-label">Total Electrical Demand</div><div class="s-val c-coral">'+Math.round(sumKW)+' kW</div><div class="s-unit">kW</div><div class="s-sub">from power density × NSF</div></div>'+
-       '<div class="strip-cell"><div class="s-label">Electrical Heat Gain</div><div class="s-val c-coral">'+Math.round(sumElecT)+' T</div><div class="s-unit">tons</div><div class="s-sub">kW × 0.2843 tons/kW</div></div>'+
-       '<div class="strip-cell"><div class="s-label">Ventilation Load</div><div class="s-val c-teal">'+Math.round(sumVentT)+' T</div><div class="s-unit">tons</div><div class="s-sub">ACH × vol × ΔT / 12,000</div></div>'+
-       '<div class="strip-cell"><div class="s-label">Process + Misc Load</div><div class="s-val c-amber">'+Math.round(sumProcT)+' T</div><div class="s-unit">tons</div><div class="s-sub">residual heat gain</div></div>'+
-       '<div class="strip-cell"><div class="s-label">Total Estimated Cooling</div><div class="s-val c-purple">'+Math.round(sumTotal)+' T</div><div class="s-unit">tons</div><div class="s-sub">Standalone vs. CUP threshold</div></div>'+
+       '<div class="strip-cell" title="Σ (Open-Lab W/sf × card NSF) across every Technical Criteria card, ÷ 1,000.\nBased on per-card NSF (not GSF). NSF for PI Typology cards auto-syncs to the program; other cards use the value shown in the card header.">'+
+         '<div class="s-label">Total Electrical Demand</div>'+
+         '<div class="s-val c-coral">'+Math.round(sumKW)+'</div>'+
+         '<div class="s-unit">kW</div>'+
+         '<div class="s-sub">Σ (W/sf × NSF) ÷ 1,000</div>'+
+       '</div>'+
+       '<div class="strip-cell" title="Electrical-equipment heat dumped into the space, converted to cooling tons.\nkW × 0.2843 = tons (1 ton = 3.517 kW).\nScales linearly with the kW total above, which scales with program NSF.">'+
+         '<div class="s-label">Electrical Heat Gain</div>'+
+         '<div class="s-val c-coral">'+Math.round(sumElecT)+'</div>'+
+         '<div class="s-unit">tons</div>'+
+         '<div class="s-sub">kW ÷ 3.517 kW/ton</div>'+
+       '</div>'+
+       '<div class="strip-cell" title="Sensible heat to condition the outdoor-air ventilation stream.\nFormula: ACH × NSF × ceiling_ft / 60 × ρair × cp × ΔT ÷ 12,000.\nUses ρ=0.0752 lb/ft³, cp=0.24 BTU/lb·°F, ΔT=20°F, 14 ft ceiling.\nThis is the standard psychrometric sensible-heat calc — NOT ASHRAE 90.1 (which is an energy code).\nASHRAE 62.1 sets minimum ventilation rates that establish what ACH ends up being.">'+
+         '<div class="s-label">Ventilation Load</div>'+
+         '<div class="s-val c-teal">'+Math.round(sumVentT)+'</div>'+
+         '<div class="s-unit">tons</div>'+
+         '<div class="s-sub">ACH × vol × ΔT ÷ 12,000</div>'+
+       '</div>'+
+       '<div class="strip-cell" title="Heat from process equipment (lasers, autoclaves, freezers, vacuum pumps, etc.).\nFormula: process_W/sf × NSF × 3.412 BTU/Wh ÷ 12,000.\nThe process W/sf comes from each card (visible only if the card is expanded — stored as l.proc_wpsf, default 1.5 for wet labs).">'+
+         '<div class="s-label">Process + Misc Load</div>'+
+         '<div class="s-val c-amber">'+Math.round(sumProcT)+'</div>'+
+         '<div class="s-unit">tons</div>'+
+         '<div class="s-sub">process W/sf × NSF</div>'+
+       '</div>'+
+       '<div class="strip-cell" title="Sum of Electrical Heat Gain + Ventilation Load + Process + Misc.\nUse to compare against the CUP (central utility plant) tie-in threshold: above ~400-500 tons a standalone chiller is rarely viable.">'+
+         '<div class="s-label">Total Estimated Cooling</div>'+
+         '<div class="s-val c-purple">'+Math.round(sumTotal)+'</div>'+
+         '<div class="s-unit">tons</div>'+
+         '<div class="s-sub">elec + vent + process</div>'+
+       '</div>'+
+       // v0.5.46: NEW — Total Supply CFM + CFM/GSF.
+       '<div class="strip-cell" title="Σ (ACH × NSF × ceiling_ft / 60) across every card — same volume the Ventilation Load uses.\nACH↔CFM/SF: CFM/sf = ACH × ceiling_ft ÷ 60. At a 14 ft ceiling, 6 ACH ≈ 1.4 CFM/sf, 4 ACH ≈ 0.9 CFM/sf, 10 ACH ≈ 2.3 CFM/sf.\nCFM/GSF below is the building-wide outdoor-air metric — useful for AHU sizing.">'+
+         '<div class="s-label">Total Supply Air</div>'+
+         '<div class="s-val c-teal">'+F(Math.round(sumCFM))+'</div>'+
+         '<div class="s-unit">CFM</div>'+
+         '<div class="s-sub">'+(cfmPerGSF ? cfmPerGSF.toFixed(2)+' CFM/GSF · ' : '')+(cfmPerNSF ? cfmPerNSF.toFixed(2)+' CFM/NSF' : '')+'</div>'+
+       '</div>'+
        '</div>';
 
-  h += '<div class="legend-strip">'+
-       '<div class="leg"><div class="swatch sw-elec"></div>Electrical heat gain — driven by Power Density × NSF → converted to BTU/hr</div>'+
-       '<div class="leg"><div class="swatch sw-vent"></div>Ventilation load — driven by ACH × floor-to-floor volume × supply/return ΔT</div>'+
-       '<div class="leg"><div class="swatch sw-proc"></div>Process / misc — supplemental equipment, process CHW, residual gains</div>'+
-       '<div class="leg-note">All values preliminary — pending AEI confirmation</div>'+
+  // v0.5.46: replace the old "AEI confirmation" legend with a tighter help
+  // block that calls out the formula basis for each load + the ACH↔CFM
+  // identity (which is the question Tom asked).
+  h += '<div class="legend-strip" style="flex-wrap:wrap;gap:14px">'+
+       '<div class="leg"><div class="swatch sw-elec"></div><b>Electrical heat</b>&nbsp;= Open-Lab W/sf × card NSF ÷ 1,000 → ÷ 3.517 kW/ton (scales with program NSF for PI-typology cards)</div>'+
+       '<div class="leg"><div class="swatch sw-vent"></div><b>Ventilation</b>&nbsp;= ACH × NSF × 14 ft ÷ 60 × ρ × c<sub>p</sub> × ΔT ÷ 12,000 (sensible-heat formula; ASHRAE 62.1 sets ACH minimums)</div>'+
+       '<div class="leg"><div class="swatch sw-proc"></div><b>Process / misc</b>&nbsp;= per-card process W/sf × NSF × 3.412 ÷ 12,000 (lasers, autoclaves, vacuum, etc.)</div>'+
+       '<div class="leg" style="flex:1 1 100%"><div class="swatch" style="background:#9EDDD1"></div><b>CFM ↔ ACH</b>&nbsp;at a 14 ft floor-to-floor: <b>CFM/sf = ACH × 14 ÷ 60 ≈ ACH × 0.233</b>. So 6 ACH ≈ 1.4 CFM/sf, 10 ACH ≈ 2.3 CFM/sf.</div>'+
+       '<div class="leg-note">All values preliminary</div>'+
        '</div>';
 
   h += '<div class="mep-grid">' + mepLabs.map(mepCard).join('') + '</div>';
@@ -6940,11 +7004,42 @@ if (typeof renderMEP === 'function') {
       + '</div>';
   }
 
+  // v0.5.46: Recompute lab.nsf from the linked program category so loads
+  // scale automatically when PI counts / per-FTE areas change. Type-bound
+  // cards mirror (groupOpenLab + groupLabSupport) × pis; core-bound cards
+  // mirror coreItem.nasf; non-lab cards keep whatever value the user has set
+  // (we don't try to infer office / community NSF from program here — too
+  // tab-dependent). Multi-category cards sum across all matching sources.
+  function _skillSyncMepNsf(d) {
+    if (!d || !Array.isArray(S.mepLabs)) return;
+    var typeArea = {};   // typology id → lab+support NSF in current program
+    (d.types || []).forEach(function(t) {
+      var area = (+t.groupOpenLab || 0) + (+t.groupLabSupport || 0);
+      typeArea[t.id] = Math.round(area * (+t.pis || 0));
+    });
+    var coreArea = {};
+    (S.coreItems || []).forEach(function(c) {
+      if (c && c.name) coreArea[c.name] = (c.on ? (+c.nasf || 0) : 0);
+    });
+    S.mepLabs.forEach(function(l) {
+      var cats = l.categories || [];
+      var anyLabBound = cats.some(function(c){ return c.kind==='type' || c.kind==='core'; });
+      if (!anyLabBound) return;  // non-lab cards keep user-set NSF
+      var sum = 0;
+      cats.forEach(function(c) {
+        if      (c.kind === 'type' && typeArea[c.id] != null) sum += typeArea[c.id];
+        else if (c.kind === 'core' && coreArea[c.id] != null) sum += coreArea[c.id];
+      });
+      if (sum > 0) l.nsf = sum;
+    });
+  }
+
   // ---- override renderMEP: name resync + single toggle next to + Add -------
   if (typeof renderMEP === 'function') {
     var _v1RenderMEP = renderMEP;
     renderMEP = function(d) {
       (S.mepLabs||[]).forEach(function(l){ _migrate(l); _refreshName(l); _syncSourceId(l); });
+      _skillSyncMepNsf(d);
       var html = _v1RenderMEP(d);
       // Single toggle button placed immediately before "+ Add Technical Criteria"
       var labs = S.mepLabs || [];
@@ -7046,11 +7141,66 @@ if (typeof renderMEP === 'function') {
   // temperature/RH pair rows — we intentionally skip those (per spec).
   // v0.5.45: HVAC reorder — supp_hvac (HVAC System) now sits after the two
   // air-change numerics, ABOVE pressure (HVAC Notes).
+  // v0.5.46: + process_cw row, hood width + sash open numerics, and a
+  // derived Hood Exhaust row (no path — V3 skips computed cells).
   var _SEC_KEYS = {
-    'HVAC':       ['hvac.ach_occ','hvac.ach_unocc','hvac.supp_hvac','hvac.pressure','hvac.filtration','hvac.fumehoods_per_pi'],
+    'HVAC':       [
+      'hvac.ach_occ','hvac.ach_unocc','hvac.supp_hvac','hvac.pressure',
+      'hvac.process_cw','hvac.filtration',
+      'hvac.fumehoods_per_pi','hvac.fume_hood_width_ft','hvac.fume_hood_sash_in'
+    ],
     'Thermal':    [null, null, 'thermal.tolerance','thermal.humidity_ctrl'],
     'Electrical': ['elec.power_demand_wpsf','elec.power_installed','elec.lighting_fc','elec.task_lighting_fc'],
     'Structural': ['structural.vibration','structural.ceiling_height','structural.casework_notes']
+  };
+
+  // v0.5.46: render the computed Hood Exhaust row. Total hoods = count × pis
+  // (per-PI basis) or count × NSF/1000 (per-1,000-SF basis). Per-hood CFM =
+  // width × (sash/12) × 100 fpm face velocity.
+  function _skillTotalPisForLab(lab) {
+    var cats = lab.categories || [];
+    var pis = 0;
+    cats.forEach(function(c) {
+      if (c.kind === 'type') {
+        var t = (S.types || []).find(function(x){ return x.id === c.id; });
+        if (t) pis += +t.pis || 0;
+      }
+    });
+    return pis;
+  }
+  function _skillRenderHoodCFMRow(lab) {
+    var count = parseFloat(lab.hvac && lab.hvac.fumehoods_per_pi);
+    var width = parseFloat(lab.hvac && lab.hvac.fume_hood_width_ft);
+    var sash  = parseFloat(lab.hvac && lab.hvac.fume_hood_sash_in);
+    var basis = (lab.hvac && lab.hvac.fume_hood_basis) === 'ksf' ? 'ksf' : 'pi';
+    var totalHoods = 0;
+    if (!isNaN(count)) {
+      if (basis === 'ksf') totalHoods = count * ((+lab.nsf || 0) / 1000);
+      else                 totalHoods = count * _skillTotalPisForLab(lab);
+    }
+    totalHoods = Math.round(totalHoods);
+    var cfmPerHood = (!isNaN(width) && !isNaN(sash)) ? Math.round(width * (sash/12) * 100) : 0;
+    var totalCFM   = Math.round(totalHoods * cfmPerHood);
+    var display = (totalHoods > 0 && cfmPerHood > 0)
+      ? (totalHoods + ' hoods × ' + cfmPerHood + ' CFM = ' + (totalCFM||0).toLocaleString() + ' CFM')
+      : 'set hoods + width + sash';
+    return '<div class="field-row">'+
+      '<span class="f-label">Hood Exhaust</span>'+
+      '<span class="f-val computed" style="cursor:default" '+
+        'title="Σ exhaust at the entered sash opening. Per-hood CFM = width × (sash/12) × 100 fpm face velocity.">'+
+        display +
+      '</span></div>';
+  }
+  window._skillRenderHoodCFMRow = _skillRenderHoodCFMRow;
+
+  // Toggle Fume Hoods basis between "per PI" and "per 1,000 SF" when the
+  // user clicks the unit text on the Fume Hoods row.
+  window._skillToggleFumeHoodBasis = function(id) {
+    var lab = (S.mepLabs||[]).find(function(m){return m.id===id;});
+    if (!lab) return;
+    if (!lab.hvac) lab.hvac = {};
+    lab.hvac.fume_hood_basis = (lab.hvac.fume_hood_basis === 'ksf') ? 'pi' : 'ksf';
+    render();
   };
 
   // v0.5.45: persistent HVAC System options. Seeded from the static defaults
@@ -7122,6 +7272,20 @@ if (typeof renderMEP === 'function') {
         // (numeric), or select.f-select.
         var cell = row.querySelector('span.f-val, span.f-num, select.f-select, input.f-select');
         if (!cell) continue;
+        // v0.5.46: skip the derived "Hood Exhaust" row — its f-val carries
+        // the .computed class, has no underlying state, and shouldn't get a
+        // data-mep-path or N/A pill.
+        if (cell.classList && cell.classList.contains('computed')) continue;
+        // v0.5.46: make the Fume Hoods unit text ("per PI" / "per 1,000 SF")
+        // clickable to toggle the storage basis.
+        if (path === 'hvac.fumehoods_per_pi') {
+          var unitEl = row.querySelector('.f-unit');
+          if (unitEl) {
+            unitEl.setAttribute('onclick', '_skillToggleFumeHoodBasis(\''+lab.id+'\')');
+            unitEl.setAttribute('title', 'Click to toggle hood-count basis (per PI ↔ per 1,000 SF)');
+            unitEl.setAttribute('style', (unitEl.getAttribute('style')||'') + ';cursor:pointer;text-decoration:underline dotted');
+          }
+        }
         cell.setAttribute('data-mep-id',   lab.id);
         cell.setAttribute('data-mep-path', path);
         // Append the N/A toggle pill at the end of the row.
