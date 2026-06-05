@@ -877,22 +877,53 @@ function calcCost(totalGSF, totalNASF, piNASF, coreNASF, commNASF, eventNASF, su
   var totalSite = Math.round(totalGSF * cs.siteRate);
 
   // ── PROGRAM FITOUT by PI typology (per-type rates × type DGSF) ──
+  // v0.8.1: every line's $/SF derives from the global Fitout Rate Menu
+  // (window.BENCH_RATES) via S.cost.benchMap, so editing a menu rate updates all
+  // lines mapped to it. The Fitout Rate Menu table edits that list directly.
+  cs.benchMap = cs.benchMap || {};
+  if (cs.benchMap['cost:piOfficeRate']  == null) cs.benchMap['cost:piOfficeRate']  = 'office';
+  if (cs.benchMap['cost:piWriteupRate'] == null) cs.benchMap['cost:piWriteupRate'] = 'writeup';
+  function _lineRate(mapType, key, fallback) {
+    var bk = cs.benchMap[mapType + ':' + key];
+    if (bk) {
+      var b = (window.BENCH_RATES || []).filter(function(x){ return x.key === bk; })[0];
+      if (b) return b.rate;
+    }
+    return fallback;
+  }
   var progLines = [];
   var officeNASF = 0;
+  var piOfficeNASF = 0, piWriteupNASF = 0;
   typeBreakdown.forEach(function(t) {
     if (t.pis <= 0) return;
-    var typeGFA = Math.round(t.totalNASF * dgsfFactor);
-    var rate = cs.typeRates[t.id] || 538;
-    var typeCost = typeGFA * rate;
-    officeNASF += t.groupOffice * t.pis;
-    progLines.push({ cat:t.label, nasf:t.totalNASF, dgsf:typeGFA, rate:rate, cost:typeCost, group:'research', color:t.color, mapType:'type', mapKey:t.id });
+    // Lab portion only (open lab + lab support). Faculty/flex office and desk
+    // (write-up) are pulled out into their own lower-cost lines below.
+    var labNASF = (t.groupOpenLab + t.groupLabSupport) * t.pis;
+    var typeGFA = Math.round(labNASF * dgsfFactor);
+    var rate = _lineRate('type', t.id, (cs.typeRates && cs.typeRates[t.id]) || 538);
+    officeNASF    += t.groupOffice * t.pis;
+    piOfficeNASF  += t.groupOffice * t.pis;
+    piWriteupNASF += t.groupDesk   * t.pis;
+    progLines.push({ cat:t.label, nasf:labNASF, dgsf:typeGFA, rate:rate, cost:typeGFA*rate, group:'research', color:t.color, mapType:'type', mapKey:t.id });
   });
+  // Office (faculty + flex) and Write-Up (desk) pulled out of the typologies and
+  // costed at their own (lower) menu rates — these are cheaper than wet/dry labs.
+  if (piOfficeNASF > 0) {
+    var _oRate = _lineRate('cost', 'piOfficeRate', (cs.piOfficeRate != null ? cs.piOfficeRate : 757));
+    var _oGFA  = Math.round(piOfficeNASF * dgsfFactor);
+    progLines.push({ cat:'PI Office (Faculty + Flex)', nasf:piOfficeNASF, dgsf:_oGFA, rate:_oRate, cost:_oGFA*_oRate, group:'research', color:FICM.office, mapType:'cost', mapKey:'piOfficeRate' });
+  }
+  if (piWriteupNASF > 0) {
+    var _wRate = _lineRate('cost', 'piWriteupRate', (cs.piWriteupRate != null ? cs.piWriteupRate : 540));
+    var _wGFA  = Math.round(piWriteupNASF * dgsfFactor);
+    progLines.push({ cat:'PI Write-Up / Desk', nasf:piWriteupNASF, dgsf:_wGFA, rate:_wRate, cost:_wGFA*_wRate, group:'research', color:FICM.officeA, mapType:'cost', mapKey:'piWriteupRate' });
+  }
 
   // ── SHARED FACILITIES (individual per-item rates) ──
   S.coreItems.forEach(function(c) {
     if (!c.on) return;
     var cGFA = Math.round(c.nasf * dgsfFactor);
-    var rate = cs.coreRates[c.name] || 538;
+    var rate = _lineRate('core', c.name, (cs.coreRates && cs.coreRates[c.name]) || 538);
     var cCost = cGFA * rate;
     progLines.push({ cat:c.name, nasf:c.nasf, dgsf:cGFA, rate:rate, cost:cCost, group:'core', mapType:'core', mapKey:c.name });
   });
@@ -932,7 +963,7 @@ function calcCost(totalGSF, totalNASF, piNASF, coreNASF, commNASF, eventNASF, su
   nonResCats.forEach(function(rc) {
     var nasf = byCatNonRes[rc.id] || 0;
     if (nasf <= 0) return; // skip categories with no active items
-    var rate = (cs[rc.rateKey] != null) ? cs[rc.rateKey] : 425;
+    var rate = _lineRate('cost', rc.rateKey, (cs[rc.rateKey] != null) ? cs[rc.rateKey] : 425);
     var dgsfCat = Math.round(nasf * dgsfFactor);
     var costCat = dgsfCat * rate;
     progLines.push({ cat:rc.label, nasf:nasf, dgsf:dgsfCat, rate:rate, cost:costCat, group:'other', mapType:'cost', mapKey:rc.rateKey });
@@ -946,7 +977,7 @@ function calcCost(totalGSF, totalNASF, piNASF, coreNASF, commNASF, eventNASF, su
   progLines.forEach(function(p){ _progNASFsum += (p.nasf || 0); });
   var unallocNASF = Math.max(0, Math.round(totalNASF - _progNASFsum));
   if (unallocNASF > 0) {
-    var _uRate = (cs.unassignedRate != null) ? cs.unassignedRate : 200;
+    var _uRate = _lineRate('cost', 'unassignedRate', (cs.unassignedRate != null) ? cs.unassignedRate : 200);
     var _uDgsf = Math.round(unallocNASF * dgsfFactor);
     progLines.push({ cat:'Unallocated / Shell', nasf:unallocNASF, dgsf:_uDgsf, rate:_uRate, cost:_uDgsf * _uRate, group:'unalloc', mapType:'cost', mapKey:'unassignedRate' });
   }
@@ -3108,6 +3139,34 @@ function _benchSelect(mapType, key, currentRate) {
        + 'title="Map to NWU benchmark typology (Q4 2025 $/SF)" '
        + 'style="margin-top:3px;font-size:.72rem;padding:2px 3px;max-width:165px;color:var(--navy)">'+opts+'</select>';
 }
+// v0.8.1: the Fitout Rate Menu IS window.BENCH_RATES — a single static list,
+// shared across all scenarios (loadScenario never touches window globals), that
+// every Cost Detail dropdown pulls from. Editing a rate here updates every cost
+// line mapped to it (rates resolve live via S.cost.benchMap → BENCH_RATES).
+function setMenuRate(key, val) {
+  var b = (window.BENCH_RATES || []).filter(function(x){ return x.key === key; })[0];
+  if (b) b.rate = parseInt(val, 10) || 0;
+  render();
+}
+function setMenuLabel(key, val) {
+  var b = (window.BENCH_RATES || []).filter(function(x){ return x.key === key; })[0];
+  if (b) b.label = String(val);
+  render();
+}
+function addMenuRow() {
+  window.BENCH_RATES = window.BENCH_RATES || [];
+  var k = 'custom_' + Date.now().toString(36);
+  window.BENCH_RATES.push({ key:k, label:'New Rate', rate:500 });
+  render();
+}
+function deleteMenuRow(key) {
+  window.BENCH_RATES = (window.BENCH_RATES || []).filter(function(x){ return x.key !== key; });
+  // Drop any line mappings that pointed at the deleted rate (those lines fall
+  // back to their default until re-mapped).
+  var bm = (S.cost && S.cost.benchMap) || {};
+  Object.keys(bm).forEach(function(k){ if (bm[k] === key) delete bm[k]; });
+  render();
+}
 function setDeptGross(val) { S.deptGrossPct = parseFloat(val); render(); }
 function setBasementResearch(val) { S.basementResearchPct = parseFloat(val); render(); }
 function FM(n) { return '$' + F(Math.round(n)); }
@@ -3333,69 +3392,25 @@ function renderCost(d) {
   // plus the same benchmark-typology dropdown used in the Cost Detail table.
   // Both write the same S.cost rate fields, so editing a value or remapping a
   // category here updates the dropdown, the Cost Detail, and the cost math.
-  h += '<div class="card"><div class="card-title">Fitout Rates ($/DGSF)</div>';
-  h += '<div class="card-sub">One row per program category. Type a $/SF rate or pick a benchmark typology — either updates the Cost Detail and the calculated cost. Each rate covers interiors, fit/equip, MEP &amp; general requirements, applied to that category\'s DGSF.</div>';
+  h += '<div class="card"><div class="card-title">Fitout Rate Menu ($/SF)</div>';
+  h += '<div class="card-sub">A standalone, reusable list of fit-out $/SF rates &mdash; the single menu every Cost Detail dropdown pulls from. Edit a rate here and every cost line mapped to it updates. This list stays the same across all scenarios and does <strong>not</strong> auto-populate from the PI typologies or Academic Space program &mdash; add or delete rows to curate your own menu, then pick a rate per line in the Cost Detail table.</div>';
   h += '<div style="overflow-x:auto"><table class="comp" style="background:transparent">';
   h += '<thead><tr>'
-    +  '<th style="background:#F0EAE3;color:var(--navy);text-transform:uppercase;letter-spacing:.05em;font-size:.78rem;text-align:left;min-width:240px;border-bottom:1px solid #B7BCBF">Program Category</th>'
-    +  '<th style="background:#F0EAE3;color:var(--navy);text-transform:uppercase;letter-spacing:.05em;font-size:.78rem;text-align:center;width:130px;border-bottom:1px solid #B7BCBF">$/SF</th>'
+    +  '<th style="background:#F0EAE3;color:var(--navy);text-transform:uppercase;letter-spacing:.05em;font-size:.78rem;text-align:left;min-width:240px;border-bottom:1px solid #B7BCBF">Rate Name</th>'
+    +  '<th style="background:#F0EAE3;color:var(--navy);text-transform:uppercase;letter-spacing:.05em;font-size:.78rem;text-align:center;width:120px;border-bottom:1px solid #B7BCBF">$/SF</th>'
+    +  '<th style="background:#F0EAE3;width:44px;border-bottom:1px solid #B7BCBF"></th>'
     +  '</tr></thead><tbody>';
-
-  function _rateRow(label, rate, oninput, opts) {
-    opts = opts || {};
-    var dot = opts.color ? '<span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:'+opts.color+';margin-right:8px;vertical-align:middle"></span>' : '';
-    var pad = opts.indent ? 'style="padding-left:18px;font-family:\'Sora\',sans-serif;font-weight:600"'
-                          : 'style="font-family:\'Sora\',sans-serif;font-weight:600"';
-    var row = '<tr>';
-    row += '<td '+pad+'>'+dot+label+'</td>';
-    // Editable $/SF — onchange (fires on blur/Enter) keeps focus while typing.
-    row += '<td style="text-align:center"><input type="number" min="0" step="10" value="'+rate+'" onchange="'+oninput+'" '
-         + 'style="width:100px;font-family:\'IBM Plex Mono\',monospace;font-weight:700;text-align:right;color:var(--navy);padding:5px 7px;border:1.5px solid var(--bdr);border-radius:6px"></td>';
-    row += '</tr>';
-    return row;
-  }
-  function _rateSection(label) {
-    return '<tr><td colspan="2" style="font-family:\'Sora\',sans-serif;font-weight:700;color:#5A5F66;font-size:.74rem;text-transform:uppercase;letter-spacing:.07em;padding:14px 10px 6px;border-top:1px solid #B7BCBF">'+label+'</td></tr>';
-  }
-
-  h += _rateSection('Research — PI Typologies');
-  S.types.forEach(function(t) {
-    var rate = S.cost.typeRates[t.id] || 538;
-    h += _rateRow(t.label, rate, "setTypeRate('"+t.id+"',this.value)", { color: t.color, mapType:'type', mapKey:t.id });
+  (window.BENCH_RATES || []).forEach(function(b){
+    var k = String(b.key).replace(/\\/g,'\\\\').replace(/'/g,"\\'");
+    var lbl = String(b.label).replace(/"/g,'&quot;');
+    h += '<tr>'
+      + '<td><input type="text" value="'+lbl+'" onchange="setMenuLabel(\''+k+'\',this.value)" style="width:94%;font-family:\'Sora\',sans-serif;font-weight:600;color:var(--navy);padding:5px 7px;border:1.5px solid var(--bdr);border-radius:6px"></td>'
+      + '<td style="text-align:center"><input type="number" min="0" step="10" value="'+b.rate+'" onchange="setMenuRate(\''+k+'\',this.value)" style="width:90px;font-family:\'IBM Plex Mono\',monospace;font-weight:700;text-align:right;color:var(--navy);padding:5px 7px;border:1.5px solid var(--bdr);border-radius:6px"></td>'
+      + '<td style="text-align:center"><button onclick="deleteMenuRow(\''+k+'\')" title="Delete this rate" style="border:none;background:transparent;color:#B0410E;font-size:1.15rem;line-height:1;cursor:pointer;font-weight:700">&times;</button></td>'
+      + '</tr>';
   });
-
-  var activeCoreItems = (S.coreItems || []).filter(function(c){ return c.on; });
-  if (activeCoreItems.length > 0) {
-    h += _rateSection('Shared Facilities');
-    activeCoreItems.forEach(function(c) {
-      var rate = S.cost.coreRates[c.name] || 538;
-      h += _rateRow(c.name, rate, "setCoreRate('"+c.name+"',this.value)", { indent:true, mapType:'core', mapKey:c.name });
-    });
-  }
-
-  h += _rateSection('Non-Research Program');
-  var nonResRates = [
-    { key:'communityRate',       label:'Community'         },
-    { key:'collaborationRate',   label:'Collaboration'     },
-    { key:'eventRate',           label:'Event'             },
-    { key:'classroomRate',       label:'Classroom'         },
-    { key:'teachingLabRate',     label:'Teaching Lab'      },
-    { key:'learningSupportRate', label:'Learning Support'  },
-    { key:'officeEnclosedRate',  label:'Office (Enclosed)' },
-    { key:'officeOpenRate',      label:'Office (Open)'     },
-    { key:'officeSupportRate',   label:'Office Support'    },
-    { key:'supportRate',         label:'Program Support'   }
-  ];
-  nonResRates.forEach(function(s) {
-    var v = (S.cost[s.key] != null) ? S.cost[s.key] : 425;
-    h += _rateRow(s.label, v, "setCostInt('"+s.key+"',this.value)", { indent:true, mapType:'cost', mapKey:s.key });
-  });
-
-  // Unallocated NASF (warm shell) — applied to any capacity not yet programmed.
-  h += _rateSection('Unallocated / Shell');
-  h += _rateRow('Unallocated (warm shell)', (S.cost.unassignedRate!=null?S.cost.unassignedRate:200), "setCostInt('unassignedRate',this.value)", { indent:true });
-
   h += '</tbody></table></div>';
+  h += '<div style="margin-top:10px"><button class="btn btn-sm btn-navy" onclick="addMenuRow()">+ Add rate</button></div>';
   // Fitout Total — the one true totaling line for this card, blush highlight.
   h += '<div style="background:#E8D4C6;font-family:\'Sora\',sans-serif;font-weight:800;font-size:1.0rem;padding:10px 12px;margin-top:10px;border-top:2px solid #B7BCBF;text-align:right;color:var(--navy)">Fitout Total: '+FMM(cs.totalFitout)+'</div>';
   h += '</div>';
@@ -6711,7 +6726,7 @@ window.BENCH_RATES = [
   { key:'computational', label:'Computational',          rate:538  },
   { key:'flex',          label:'Flex Lab',               rate:468  },
   { key:'office',        label:'Office',                 rate:757  },
-  { key:'writeup',       label:'Write-up',               rate:860  },
+  { key:'writeup',       label:'Write-Up / Desk',        rate:540  },
   { key:'community',     label:'Community',              rate:605  },
   { key:'event',         label:'Event',                  rate:860  },
   { key:'optics_nano',   label:'Optics — Nano (Higher Intensity)', rate:1680 },
