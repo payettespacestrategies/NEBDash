@@ -251,6 +251,7 @@ footer .ft-right{display:flex;align-items:center;gap:12px}
 <h1>NEB Programming Dashboard</h1>
 </div>
 <div class="tabs" id="tabBar"></div>
+<div id="scenarioBar"></div>
 <div class="ms" id="metrics"></div>
 <div id="content"></div>
 <footer><div class="ft-left"><button class="btn btn-navy" onclick="exportJSON()">Export JSON</button><button class="btn btn-out" onclick="document.getElementById('importJsonInput').click()">Import JSON</button><input type="file" id="importJsonInput" accept=".json,application/json" style="display:none" onchange="importJSON(event)"><button class="btn btn-navy" onclick="exportXLSX()">Export Excel</button><button class="btn btn-out" onclick="printDashboard()">Print</button></div><div class="ft-right"><span id="ts"></span> &nbsp;|&nbsp; <span style="opacity:.7">Generated 2026-05-06 · skill v0.5</span></div></footer>
@@ -507,7 +508,9 @@ function C() {
   var _gfGSF = (S.groundFloorGSF != null) ? S.groundFloorGSF : S.aboveGradeGSF;
   var gfNASF = Math.round(_gfGSF * S.groundFloorEff);
   var basementNASF = Math.round(S.basementGSF * S.basementEff);
-  var totalNASF = basementNASF + gfNASF + (researchFloors * researchFloorNASF);
+  // v0.7.2: penthouse can now hold program when its efficiency > 0.
+  var penthouseNASF = Math.round((S.penthouseGSF || 0) * (S.penthouseEff || 0));
+  var totalNASF = basementNASF + gfNASF + (researchFloors * researchFloorNASF) + penthouseNASF;
   var overallEff = totalGSF > 0 ? totalNASF / totalGSF : 0;
   var communityNASF = Math.round(totalGSF * S.communityPct);
 
@@ -799,7 +802,7 @@ function C() {
   return {
     totalGSF:totalGSF, totalNASF:totalNASF, overallEff:overallEff,
     researchFloors:researchFloors, researchFloorNASF:researchFloorNASF,
-    gfNASF:gfNASF, basementNASF:basementNASF, basementResearchNASF:basementResearchNASF,
+    gfNASF:gfNASF, basementNASF:basementNASF, penthouseNASF:penthouseNASF, basementResearchNASF:basementResearchNASF,
     basementLabNASF:basementLabNASF, basementCoreNASF:basementCoreNASF,
     basementUsed:basementUsed, basementCapacity:basementCapacity, basementSurplus:basementSurplus,
     basementByType:basementByType,
@@ -834,7 +837,7 @@ function calcCost(totalGSF, totalNASF, piNASF, coreNASF, commNASF, eventNASF, su
   // DGSF model: Departmental Gross = GSF × deptGrossPct, MEP/Shell = remainder
   var dgsf = Math.round(totalGSF * S.deptGrossPct);
   var mepGSF = totalGSF - dgsf;
-  // NASF-to-DGSF inflation factor (NASF → GFA for each program type)
+  // NASF-to-DGSF inflation factor (NASF → GSF for each program type)
   var dgsfFactor = totalNASF > 0 ? dgsf / totalNASF : 1;
 
   // ── CORE & SHELL (applied to total GSF) ──
@@ -852,7 +855,7 @@ function calcCost(totalGSF, totalNASF, piNASF, coreNASF, commNASF, eventNASF, su
     var rate = cs.typeRates[t.id] || 538;
     var typeCost = typeGFA * rate;
     officeNASF += t.groupOffice * t.pis;
-    progLines.push({ cat:t.label, nasf:t.totalNASF, dgsf:typeGFA, rate:rate, cost:typeCost, group:'research', color:t.color });
+    progLines.push({ cat:t.label, nasf:t.totalNASF, dgsf:typeGFA, rate:rate, cost:typeCost, group:'research', color:t.color, mapType:'type', mapKey:t.id });
   });
 
   // ── SHARED FACILITIES (individual per-item rates) ──
@@ -861,7 +864,7 @@ function calcCost(totalGSF, totalNASF, piNASF, coreNASF, commNASF, eventNASF, su
     var cGFA = Math.round(c.nasf * dgsfFactor);
     var rate = cs.coreRates[c.name] || 538;
     var cCost = cGFA * rate;
-    progLines.push({ cat:c.name, nasf:c.nasf, dgsf:cGFA, rate:rate, cost:cCost, group:'core' });
+    progLines.push({ cat:c.name, nasf:c.nasf, dgsf:cGFA, rate:rate, cost:cCost, group:'core', mapType:'core', mapKey:c.name });
   });
 
   // ── NON-RESEARCH PROGRAM AREAS ──
@@ -902,27 +905,60 @@ function calcCost(totalGSF, totalNASF, piNASF, coreNASF, commNASF, eventNASF, su
     var rate = (cs[rc.rateKey] != null) ? cs[rc.rateKey] : 425;
     var dgsfCat = Math.round(nasf * dgsfFactor);
     var costCat = dgsfCat * rate;
-    progLines.push({ cat:rc.label, nasf:nasf, dgsf:dgsfCat, rate:rate, cost:costCat, group:'other' });
+    progLines.push({ cat:rc.label, nasf:nasf, dgsf:dgsfCat, rate:rate, cost:costCat, group:'other', mapType:'cost', mapKey:rc.rateKey });
   });
 
   var totalFitout = 0;
   progLines.forEach(function(p) { totalFitout += p.cost; });
 
-  // ── BASE CONSTRUCTION (Q4 2025) ──
+  // ── BASE CONSTRUCTION (Q4 2025) — Construction + Gen Conditions ──
   var constructionCost = totalCoreShell + totalFitout + totalSite;
 
-  // ── ESCALATION ──
+  // ── PROJECT COST BUILDUP (Northwestern Project Budget Breakdown) ──
+  // Each markup line is a % of TOTAL PROJECT COST (matching the budget table).
+  // With base construction known, Total = Construction ÷ (1 − Σ markup %).
+  var _fr = {
+    design: cs.designContingencyPct      || 0,
+    constr: cs.constructionContingencyPct|| 0,
+    esc:    cs.escalationPct             || 0,
+    prof:   cs.professionalServicesPct   || 0,
+    owner:  cs.ownerWorkPct              || 0,
+    projc:  cs.projectContingencyPct     || 0,
+    permit: cs.permitsPct                || 0,
+    pm:     cs.pmFeePct                  || 0
+  };
+  var markupSum = _fr.design + _fr.constr + _fr.esc + _fr.prof + _fr.owner + _fr.projc + _fr.permit + _fr.pm;
+  if (markupSum > 0.95) markupSum = 0.95;   // guard against divide-by-zero
+  var projectCost = (1 - markupSum) > 0 ? Math.round(constructionCost / (1 - markupSum)) : constructionCost;
+
+  // Hard-cost lines (each a % of total project).
+  var designContingency       = Math.round(projectCost * _fr.design);
+  var constructionContingency = Math.round(projectCost * _fr.constr);
+  var escalationCost          = Math.round(projectCost * _fr.esc);
+  var hardCost = constructionCost + designContingency + constructionContingency + escalationCost;
+
+  // Soft-cost lines (each a % of total project).
+  var softLines = [
+    { key:'professionalServices', label:'Professional Services', amount: Math.round(projectCost * _fr.prof) },
+    { key:'ownerWork',            label:'Owner Work',            amount: Math.round(projectCost * _fr.owner) },
+    { key:'projectContingency',   label:'Project Contingency',   amount: Math.round(projectCost * _fr.projc) },
+    { key:'permits',              label:'Permits',               amount: Math.round(projectCost * _fr.permit) },
+    { key:'pmFee',                label:'Project Management Fee', amount: Math.round(projectCost * _fr.pm) }
+  ];
+  var softCostTotal = softLines.reduce(function(a,s){ return a + s.amount; }, 0);
+  // Reconcile the total to the sum of the displayed parts (rounding-safe).
+  projectCost = hardCost + softCostTotal;
+
+  // Compatibility fields (escalation is now a flat % line; year fields stay on
+  // S.cost for the spreadsheet export). Tariff retired (not in the breakdown).
+  var preEscalation = constructionCost + designContingency + constructionContingency;
   var baseQ = cs.baseQuarter || 4;
   var yearsToMid = (cs.escalationYear - cs.baseYear) + (cs.escalationQuarter - baseQ) / 4;
-  var escalationFactor = Math.pow(1 + cs.escalationRate, yearsToMid);
-  var escalatedConstruction = Math.round(constructionCost * escalationFactor);
-
-  // ── TARIFF PREMIUM ──
-  var tariffCost = Math.round(escalatedConstruction * cs.tariffPct);
-  var postTariff = escalatedConstruction + tariffCost;
-
-  // ── PROJECT COST (soft costs) ──
-  var projectCost = Math.round(postTariff * cs.softMultiplier);
+  var escalationFactor = preEscalation > 0 ? (1 + escalationCost / preEscalation) : 1;
+  var tariffCost = 0;
+  var escalatedConstruction = hardCost;
+  var postTariff = hardCost;
+  var softMultiplier = hardCost > 0 ? (projectCost / hardCost) : 1;   // derived (compat)
 
   return {
     dgsf:dgsf, mepGSF:mepGSF, dgsfFactor:dgsfFactor,
@@ -931,13 +967,16 @@ function calcCost(totalGSF, totalNASF, piNASF, coreNASF, commNASF, eventNASF, su
     progLines:progLines, totalFitout:totalFitout,
     openLabNASF:openLabNASF, labSupportNASF:labSupportNASF, deskNASF:deskNASF, officeNASF:officeNASF,
     constructionCost:constructionCost,
-    escalationFactor:escalationFactor, yearsToMid:yearsToMid,
+    designContingency:designContingency, constructionContingency:constructionContingency,
+    preEscalation:preEscalation,
+    escalationFactor:escalationFactor, yearsToMid:yearsToMid, escalationCost:escalationCost,
     escalatedConstruction:escalatedConstruction,
     tariffCost:tariffCost, tariffPct:cs.tariffPct, postTariff:postTariff,
-    softMultiplier:cs.softMultiplier, projectCost:projectCost,
+    hardCost:hardCost, softLines:softLines, softCostTotal:softCostTotal,
+    softMultiplier:softMultiplier, projectCost:projectCost,
     totalGSF: totalGSF,
     costPerGSF: totalGSF > 0 ? projectCost / totalGSF : 0,
-    constructionPerGSF: totalGSF > 0 ? postTariff / totalGSF : 0,
+    constructionPerGSF: totalGSF > 0 ? hardCost / totalGSF : 0,
   };
 }
 
@@ -1038,6 +1077,9 @@ function renderProjectSize(d) {
   h += sl('Above-Grade Floor Efficiency', 'aboveGradeEff', Math.round(S.aboveGradeEff*100), 50, 85, 1, '%', true);
   h += sl('Ground Floor Efficiency', 'groundFloorEff', Math.round(S.groundFloorEff*100), 40, 70, 1, '%', true);
   h += sl('Basement Efficiency', 'basementEff', Math.round(S.basementEff*100), 25, 65, 1, '%', true);
+  // v0.7.2: penthouse efficiency — set above 0 to make the top floor hold
+  // program (it then becomes a selectable floor on the Academic Space tab).
+  h += sl('Penthouse Efficiency', 'penthouseEff', Math.round((S.penthouseEff||0)*100), 0, 75, 1, '%', true);
 
   h += '<div style="margin-top:12px;padding-top:12px;border-top:2px solid var(--navy)">';
   h += bigRow('Total NASF', F(d.totalNASF));
@@ -1045,6 +1087,7 @@ function renderProjectSize(d) {
   h += bigRow('NASF per Research Floor', F(d.researchFloorNASF));
   h += bigRow('Ground Floor NASF', F(d.gfNASF));
   h += bigRow('Basement NASF', F(d.basementNASF));
+  h += bigRow('Penthouse NASF', F(d.penthouseNASF || 0));
   h += '</div></div></div>';
 
   // Mini stacking
@@ -1093,7 +1136,9 @@ function renderMiniSection(d) {
   // Bar widths are proportional to each floor's GSF; bars are navy with the
   // floor's GSF inside. Penthouse stays grey (Building Support).
   var floors = [];
-  floors.push({ label:'Penthouse', gsf:(S.penthouseGSF||0), type:'support', displayGSF:false });
+  // v0.7.4: penthouse now renders a split bar — a dark-blue NASF portion sized
+  // to its efficiency + a grey building-support remainder.
+  floors.push({ label:'Penthouse', gsf:(S.penthouseGSF||0), type:'penthouse', eff:(S.penthouseEff||0), displayGSF:true });
   var topFloor = S.aboveGradeFloors;
   for (var i = topFloor; i >= 2; i--) {
     floors.push({ label:'Floor ' + i, gsf:(S.aboveGradeGSF||0), type:'gsf', displayGSF:true });
@@ -1107,12 +1152,25 @@ function renderMiniSection(d) {
   var h = '<div style="max-width:760px;margin:0 auto">';
   floors.forEach(function(f) {
     if (f.label === '__GRADE_LINE__') { h += '<div style="border-top:3px solid #000;margin:4px 0"></div>'; return; }
+    var widthPct = (f.gsf / maxGSF * 100).toFixed(1);
+    // Penthouse: split bar \u2014 dark-blue NASF (= GSF \u00d7 efficiency) + grey support.
+    if (f.type === 'penthouse') {
+      var eff = Math.max(0, Math.min(1, f.eff || 0));
+      var nasf = Math.round(f.gsf * eff);
+      var nasfW = (eff * 100).toFixed(1);
+      var supW  = ((1 - eff) * 100).toFixed(1);
+      h += '<div class="floor-row"><div class="floor-label">'+f.label+'</div>';
+      h += '<div style="flex:1;display:flex"><div style="width:'+widthPct+'%;min-width:120px;height:44px;border-radius:8px;overflow:hidden;display:flex;align-items:stretch">';
+      if (eff > 0) h += '<div style="width:'+nasfW+'%;background:#1B3A5C;display:flex;align-items:center;justify-content:center;padding:0 8px"><span style="font-size:.82rem;font-weight:700;color:#fff;white-space:nowrap">'+F(nasf)+' NASF</span></div>';
+      if (eff < 1) h += '<div style="width:'+supW+'%;background:#C2C3C8;display:flex;align-items:center;justify-content:center;padding:0 8px"><span style="font-size:.8rem;font-weight:700;color:#fff;white-space:nowrap">'+(eff>0?'Bldg Sup':'Penthouse (Building Support)')+'</span></div>';
+      h += '</div></div></div>';
+      return;
+    }
     var isSupport = (f.type === 'support');
     var color = isSupport ? '#C2C3C8' : '#1B3A5C';
     var ht    = isSupport ? '30px'    : '44px';
     var lbl   = f.displayGSF ? f.label + ' \u2014 ' + F(f.gsf) + ' GSF'
                              : f.label + ' (Building Support)';
-    var widthPct = (f.gsf / maxGSF * 100).toFixed(1);
     h += '<div class="floor-row"><div class="floor-label">'+f.label+'</div>';
     h += '<div style="flex:1;display:flex"><div style="width:'+widthPct+'%;min-width:120px;height:'+ht+';border-radius:8px;background:'+color+';display:flex;align-items:center;padding:0 14px">';
     h += '<span style="font-size:.9rem;font-weight:700;color:#fff">'+lbl+'</span>';
@@ -1419,6 +1477,11 @@ function renderMix(d) {
   // and the heavy scale/sync/render only runs once on release.
   h += '<div style="margin-top:6px"><label class="sl" style="font-size:.78rem">Total PIs (cap)</label><div class="sl-row"><input type="range" min="10" max="100" step="1" value="'+S.totalPIs+'" oninput="var lv=document.getElementById(\'totalPIsLive\'); if(lv) lv.textContent=this.value;" onchange="setTotalPIs(this.value)"><div class="sl-val" id="totalPIsLive">'+S.totalPIs+'</div></div></div>';
   h += '</div>';
+
+  // Migrated from the former Basement & Shared tab — Research Lab Allocation
+  // now lives at the bottom of the PI Space Mix tab.
+  h += _renderResearchLabAllocCardV5(d);
+
   return h;
 }
 
@@ -1832,6 +1895,139 @@ function renderBasement(d) {
   return h;
 }
 
+// ============================================================
+// MIGRATED CARDS (tab consolidation) — Research Lab Allocation moves to the
+// bottom of the PI Space Mix tab; Shared Facilities (with the Shared Target
+// Benchmark merged in at the top) moves onto the Academic Space tab. Both are
+// extracted from the former Basement & Shared tab so they can be rendered
+// full-width alongside the other cards on their new tabs.
+// ============================================================
+function _renderResearchLabAllocCardV5(d) {
+  var h = '<div class="card"><div class="card-title">Research Lab Allocation — PIs in Basement</div>';
+  h += '<div class="card-sub">For each typology, choose how many PIs have their lab + lab support physically in the basement. Computational typologies have no lab portion to allocate.</div>';
+  h += '<table class="comp"><thead><tr>';
+  h += '<th>Typology</th><th>Total PIs</th><th>PIs in Basement</th><th>Lab+Support / PI</th><th>Basement Lab NASF</th>';
+  h += '</tr></thead><tbody>';
+  d.basementByType.forEach(function(bt) {
+    h += '<tr>';
+    h += '<td style="font-weight:600;color:var(--navy)"><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:'+bt.color+';margin-right:8px;vertical-align:middle"></span>'+bt.label+'</td>';
+    h += '<td>'+bt.totalPIs+'</td>';
+    if (!bt.hasLab) {
+      h += '<td colspan="2" style="color:var(--mut);font-style:italic">no lab portion — stays on upper floors</td>';
+      h += '<td>0</td>';
+    } else if (bt.totalPIs <= 0) {
+      h += '<td colspan="2" style="color:var(--mut);font-style:italic">0 PIs assigned</td>';
+      h += '<td>0</td>';
+    } else {
+      h += '<td><div style="display:flex;align-items:center;gap:8px"><input type="range" min="0" max="'+bt.totalPIs+'" step="1" value="'+bt.basementPIs+'" oninput="setBasementAlloc(\''+bt.id+'\',this.value)" style="flex:1;accent-color:var(--navy)"><input type="number" min="0" max="'+bt.totalPIs+'" step="1" value="'+bt.basementPIs+'" onchange="setBasementAlloc(\''+bt.id+'\',this.value)" style="width:60px"></div></td>';
+      h += '<td>'+F(bt.labPerPI)+' sf</td>';
+      h += '<td style="font-weight:700;color:var(--navy)">'+F(bt.basementLabNASF)+'</td>';
+    }
+    h += '</tr>';
+  });
+  h += '<tr style="background:var(--bg);font-weight:700;border-top:2px solid var(--navy)">';
+  h += '<td colspan="4" style="padding-left:16px">Lab Subtotal in Basement</td>';
+  h += '<td style="color:var(--clrResearch);font-size:1.05rem">'+F(d.basementLabNASF)+'</td>';
+  h += '</tr></tbody></table>';
+  h += '<div style="margin-top:10px;font-size:.82rem;color:var(--mut);font-style:italic">ⓘ Desks ('+F(d.bldgDesk||0)+' sf), faculty offices, and flex offices for <strong>all</strong> PIs (whether basement- or upper-located) total '+F(d.allOfficeDeskNASF)+' sf and stay on upper research floors.</div>';
+  h += '</div>';
+  return h;
+}
+
+function _renderSharedFacilitiesCardV5(d) {
+  var h = '<div class="card"><div class="card-title">Shared Facilities</div>';
+
+  // Shared Target Benchmark — merged in at the TOP of the card.
+  h += '<div class="card-sub">Benchmark range: 15–22% of research NASF</div>';
+  h += sl('Shared % of Research NASF', 'corePct', Math.round(S.corePct*100), 5, 35, 1, '%', true);
+  h += '<div style="margin:10px 0;display:flex;gap:8px;flex-wrap:wrap">';
+  [{n:'Columbia',v:22},{n:'Ragon',v:20},{n:'GT EBB',v:19},{n:'Penn St',v:15},{n:'BU CDS',v:11}].forEach(function(p){
+    h += '<span class="badge" style="background:'+((Math.round(S.corePct*100)===p.v)?'var(--navy);color:#fff':'#eee;color:var(--navy)')+'">'+p.n+': '+p.v+'%</span>';
+  });
+  h += '</div>';
+  h += bigRow('Target Shared NASF (@ '+P(S.corePct)+')', F(d.coreTarget));
+  h += bigRow('Itemized Shared NASF', F(d.coreNASF));
+  var coreDiff = d.coreNASF - d.coreTarget;
+  var coreCls = coreDiff <= 0 ? 'under' : 'over';
+  h += '<div style="display:flex;justify-content:space-between;padding:8px 0;border-top:2px solid var(--navy)"><span style="font-weight:700">vs. Target</span><span class="'+coreCls+'" style="font-family:\'IBM Plex Mono\',monospace;font-size:1.1rem;font-weight:700">'+(coreDiff>=0?'+':'')+F(coreDiff)+' NASF</span></div>';
+
+  // Divider between the benchmark block and the editable checklist.
+  h += '<div style="height:1px;background:var(--bdr);margin:18px 0 14px"></div>';
+
+  // v0.6.2: Shared Facilities table built to match the program cards exactly —
+  // standard navy comp header, drag-to-reorder rows, click-to-edit notes, and a
+  // .derived total band at the bottom. Rows are basement-located shared labs
+  // (pink core-facilities FICM).
+  h += '<div class="card-sub">Basement-located shared labs / core facilities. Qty × NASF/Ea sets the total. Set the floor, add notes, drag to reorder, toggle on/off.</div>';
+  var sfInp = "width:100%;min-width:150px;font-size:.92rem;font-weight:500;color:var(--navy);padding:6px 8px;border:1.5px solid var(--bdr);border-radius:6px;font-family:inherit";
+  var sfSmallNum = "width:60px;font-size:.9rem;font-weight:600;color:var(--navy);padding:6px 6px;border:1.5px solid var(--bdr);border-radius:6px;text-align:right";
+  var _researchFloorsSF = Math.max(0, (S.aboveGradeFloors || 0) - 1);
+  h += '<div style="overflow-x:auto;-webkit-overflow-scrolling:touch"><table class="comp comp-tight" style="font-size:.85rem">';
+  h += '<tr>';
+  ['Lab / Facility','Qty','NASF/<br>Ea','Total<br>NASF','Floor','Notes','On?','↕'].forEach(function(col){ h += '<th>'+col+'</th>'; });
+  h += '</tr>';
+  (S.coreItems || []).forEach(function(c, i) {
+    // Backfill qty / nasf_each on legacy items so the per-unit columns work.
+    if (c.qty == null) c.qty = 1;
+    if (c.nasf_each == null) c.nasf_each = (c.nasf != null ? c.nasf : 0);
+    var qty = +(c.qty || 1), ne = +(c.nasf_each || 0), tot = qty * ne;
+    h += '<tr data-tbl="aps-shared" data-src="coreItems" data-idx="'+i+'">';
+    h += '<td><input type="text" value="'+(c.name||'').replace(/"/g,'&quot;')+'" onchange="renameCore('+i+',this.value);render()" style="'+sfInp+'"></td>';
+    h += '<td><input type="number" value="'+qty+'" min="0" step="1" onchange="_skillUpdateCoreUnit('+i+',\'qty\',this.value)" style="'+sfSmallNum+'"></td>';
+    h += '<td><input type="number" value="'+ne+'" min="0" step="100" onchange="_skillUpdateCoreUnit('+i+',\'nasf_each\',this.value)" style="'+sfSmallNum+'"></td>';
+    h += '<td style="font-family:\'IBM Plex Mono\',monospace;font-weight:700;color:var(--navy);text-align:right">'+F(tot)+'</td>';
+    // Floor dropdown — matches the academic cards (B / G / U×N / PH / 2..N).
+    var _sf = String(c.floor || 'basement').toLowerCase();
+    var _opts = ['basement','ground','upper','penthouse'];
+    for (var _f = 2; _f <= (S.aboveGradeFloors || 1); _f++) _opts.push(String(_f));
+    var floorSel = '<select onchange="_skillSetCoreFloor('+i+',this.value)" style="font-size:.95rem;padding:6px 8px;min-width:62px">';
+    _opts.forEach(function(f){
+      var lbl = f==='upper' ? ('U×'+_researchFloorsSF) : f==='ground' ? 'G' : f==='penthouse' ? 'PH' : f==='basement' ? 'B' : f;
+      floorSel += '<option value="'+f+'"'+(_sf===f?' selected':'')+'>'+lbl+'</option>';
+    });
+    floorSel += '</select>';
+    h += '<td>'+floorSel+'</td>';
+    h += '<td>'+_skillNotesField('coreItems', i, c.notes)+'</td>';
+    h += '<td><input type="checkbox" '+(c.on?'checked':'')+' onchange="toggleCore('+i+')" style="transform:scale(1.3)"></td>';
+    h += _skillDragCell('coreItems', i, 'deleteCore('+i+')');
+    h += '</tr>';
+  });
+  h += '</table></div>';
+  h += '<div style="margin-top:8px"><button class="btn btn-navy btn-sm" onclick="addCore()">+ Add Shared Facility</button></div>';
+  // Total band — same .derived style as the program cards (e.g. "Total Upper Floor Program").
+  h += '<div class="derived" style="margin-top:14px"><div class="derived-label">Total Shared NASF</div><div class="derived-val">'+F(d.coreNASF)+' NASF</div></div>';
+  h += '</div>';
+  return h;
+}
+
+// ============================================================
+// Academic Program Summary — per-column show/hide (for clean screenshots).
+// Hidden state lives on window._apsHiddenCols so it survives re-renders. The
+// table carries a <colgroup> of <col class="apscol" data-col="KEY"> and a
+// <style id="apsHideStyle"> sink; collapsing a column is a CSS rule swap.
+// ============================================================
+function _apsApplyCols() {
+  var hid = window._apsHiddenCols || {};
+  var css = '';
+  Object.keys(hid).forEach(function(k){
+    if (hid[k]) css += 'col.apscol[data-col="'+k+'"]{visibility:collapse}';
+  });
+  var st = document.getElementById('apsHideStyle');
+  if (st) st.textContent = css;
+  var chips = document.querySelectorAll('[data-apschip]');
+  for (var i = 0; i < chips.length; i++) {
+    var ch = chips[i];
+    var on = !hid[ch.getAttribute('data-apschip')];
+    ch.style.opacity = on ? '1' : '.4';
+    ch.style.textDecoration = on ? 'none' : 'line-through';
+  }
+}
+function _apsToggleCol(key) {
+  window._apsHiddenCols = window._apsHiddenCols || {};
+  window._apsHiddenCols[key] = !window._apsHiddenCols[key];
+  _apsApplyCols();
+}
+
 // Set basement PI allocation for a typology
 function setBasementAlloc(typeId, val) {
   if (!S.basementAllocation) S.basementAllocation = {};
@@ -1856,8 +2052,17 @@ function setCoreSplit(zone, val) {
 function toggleCore(i) { S.coreItems[i].on = !S.coreItems[i].on; render(); }
 function setCoreNASF(i, v) { S.coreItems[i].nasf = parseInt(v) || 0; render(); }
 function renameCore(i, v) { S.coreItems[i].name = v.trim() || S.coreItems[i].name; }
+// v0.7.3: shared facilities now use Qty × NASF/Ea (like the academic cards).
+window._skillUpdateCoreUnit = function(i, field, val) {
+  var c = S.coreItems[i]; if (!c) return;
+  var n = parseInt(val) || 0;
+  if (field === 'qty') c.qty = n; else if (field === 'nasf_each') c.nasf_each = n;
+  c.nasf = (+(c.qty || 1)) * (+(c.nasf_each || 0));   // keep c.nasf = total for the cost/area math
+  render();
+};
+window._skillSetCoreFloor = function(i, floor) { var c = S.coreItems[i]; if (c) { c.floor = floor; render(); } };
 function addCore() {
-  S.coreItems.push({ name:'New Shared Facility', nasf:1000, on:true });
+  S.coreItems.push({ name:'New Shared Facility', nasf:1000, on:true, qty:1, nasf_each:1000, floor:'basement' });
   render();
 }
 function deleteCore(i) {
@@ -2081,13 +2286,42 @@ function renderStacking(d) {
   // target), and the basement row label turns red when over capacity.
 
   h += '<div class="card"><div class="card-title">Building Section \u2014 Program Distribution</div>';
-  h += '<div class="card-sub">Bar widths are proportional to floor plate GFA. Colored segments show assigned NASF. Labels at right show NASF, Departmental Gross (DGSF = GFA \u00d7 '+(S.deptGrossPct*100).toFixed(0)+'%), and Gross Floor Area (GFA). Shared split controlled on Tab 4. Per-floor PI assignment controlled below.</div>';
+  h += '<div class="card-sub">Bar widths are proportional to floor plate GSF. Colored segments show assigned NASF. Labels at right show NASF, Departmental Gross (DGSF = GSF \u00d7 '+(S.deptGrossPct*100).toFixed(0)+'%), and Gross Square Feet (GSF). Shared split controlled on Tab 4. Per-floor PI assignment controlled below.</div>';
   h += '<div style="max-width:900px;margin:0 auto">';
 
   // Determine max GSF for proportional widths
   var maxFloorGSF = Math.max(S.basementGSF, S.aboveGradeGSF, S.penthouseGSF);
 
-  h += floorVis('Penthouse', [{label:'Building Support', nasf:S.penthouseGSF, color:'var(--clrSupport)'}], S.penthouseGSF, true, S.penthouseGSF, maxFloorGSF);
+  // v0.7.3: penthouse now shows program assigned to floor='penthouse' once its
+  // efficiency is > 0, with any remaining NASF shown as building support.
+  var phNASF = d.penthouseNASF || 0;
+  var phSegs = [];
+  var phAssigned = 0;
+  function _addPHItems(arr) {
+    (arr || []).forEach(function(g) {
+      if (!g.on) return;
+      if (String(g.floor || '').toLowerCase() !== 'penthouse') return;
+      var c = g.cat === 'event' ? 'var(--clrEvent)'
+            : g.cat === 'support' ? 'var(--clrSupport)'
+            : g.cat === 'community' || g.cat === 'collaboration' ? 'var(--clrCommunity)'
+            : g.cat === 'classroom' || g.cat === 'teaching_lab' || g.cat === 'learning_support' ? 'var(--clrEvent)'
+            : (g.cat || '').indexOf('office') === 0 ? FICM.office
+            : 'var(--clrCommunity)';
+      phSegs.push({ label: g.name.split('/')[0].split('(')[0].trim(), nasf: g.nasf, color: c });
+      phAssigned += g.nasf;
+    });
+  }
+  _addPHItems(S.gfProgram); _addPHItems(S.upperCommunity);
+  if (phNASF > 0 || phAssigned > 0) {
+    var phRemaining = Math.max(0, phNASF - phAssigned);
+    // Empty penthouse NASF capacity reads as "Unassigned" (available program
+    // space), matching the upper/basement floors — not "Building Support".
+    if (phRemaining > 0) phSegs.push({ label:'Unassigned', nasf:phRemaining, color:'#E5E5E2', _leftover:true });
+    var phDeficit = Math.max(0, phAssigned - phNASF);
+    h += floorVis('Penthouse' + (phDeficit>0?' ⚠':''), phSegs, Math.max(phNASF, phAssigned), true, S.penthouseGSF, maxFloorGSF, phDeficit>0 ? phNASF : 0);
+  } else {
+    h += floorVis('Penthouse', [{label:'Building Support', nasf:S.penthouseGSF, color:'var(--clrSupport)'}], S.penthouseGSF, true, S.penthouseGSF, maxFloorGSF);
+  }
 
   var topFloor = S.aboveGradeFloors;
   for (var f = topFloor; f >= 2; f--) {
@@ -2152,7 +2386,10 @@ function renderStacking(d) {
   if (gfCoreNASF > 0) gfSegs.push({ label:'Shared Facilities', nasf:gfCoreNASF, color:'var(--clrCore)' });
   S.gfProgram.forEach(function(g) {
     if (!g.on) return;
-    if (String(g.floor || '').toLowerCase() === 'basement') return;
+    // v0.7.3: only ground-floor items belong here — basement, penthouse, and
+    // upper/numbered floors render on their own bars.
+    var _gf = String(g.floor || '').toLowerCase();
+    if (_gf === 'basement' || _gf === 'penthouse' || _gf === 'upper' || _gf === 'all' || /^[2-9]\d*$/.test(_gf)) return;
     var c = g.cat==='event'?'var(--clrEvent)' : g.cat==='support'?'var(--clrSupport)' : 'var(--clrCommunity)';
     gfSegs.push({ label:g.name.split('/')[0].split('(')[0].trim(), nasf:g.nasf, color:c });
   });
@@ -2196,12 +2433,12 @@ function renderStacking(d) {
   h += masterLegend();
   h += '<div style="margin-top:12px;padding:10px 14px;background:#f8f9fa;border-radius:8px;font-size:.82rem;color:var(--mut);line-height:1.5">';
   h += '<strong style="color:var(--navy)">How to read this diagram:</strong> Each bar represents one floor. ';
-  h += 'The <strong>bar width</strong> is proportional to the floor\u2019s Gross Floor Area (GFA). ';
+  h += 'The <strong>bar width</strong> is proportional to the floor\u2019s Gross Square Feet (GSF). ';
   h += 'Colored segments show <strong>assigned NASF</strong> (Net Assignable Square Feet) \u2014 the usable program area. ';
   h += 'The <span style="color:var(--clrSupport);font-weight:700">gray portion</span> at the end of a bar is NASF on that floor not yet assigned to a program category. ';
   h += 'A <span style="color:#E53935;font-weight:700">red dashed line</span> marks actual floor capacity when a floor is over-programmed \u2014 adjust the envelope or program until all segments fit within the line. ';
-  h += 'Labels at right show three area measures: <strong style="color:var(--navy)">NASF</strong> (net assignable), <strong style="color:var(--teal)">DGSF</strong> (Departmental Gross = GFA \u00d7 Dept. Gross %), and <strong style="color:var(--mut)">GFA</strong> (Gross Floor Area). ';
-  h += 'The difference between GFA and NASF accounts for walls, corridors, vertical circulation, restrooms, MEP, and other non-assignable area.';
+  h += 'Labels at right show three area measures: <strong style="color:var(--navy)">NASF</strong> (net assignable), <strong style="color:var(--teal)">DGSF</strong> (Departmental Gross = GSF \u00d7 Dept. Gross %), and <strong style="color:var(--mut)">GSF</strong> (Gross Square Feet). ';
+  h += 'The difference between GSF and NASF accounts for walls, corridors, vertical circulation, restrooms, MEP, and other non-assignable area.';
   h += '</div>';
   h += '</div>';
 
@@ -2341,7 +2578,7 @@ function renderStacking(d) {
 
   // Per-floor table
   h += '<div class="card"><div class="card-title">Per-Floor Area Summary</div>';
-  h += '<table class="comp"><tr><th>Floor</th><th>PIs</th><th>GFA</th><th style="color:var(--teal)">DGSF</th><th>NASF</th><th style="color:var(--clrResearch)">Research Labs</th><th style="color:'+FICM.office+'">Faculty Office</th><th>Shared</th><th>Community</th><th>Event</th><th>Unassigned</th></tr>';
+  h += '<table class="comp"><tr><th>Floor</th><th>PIs</th><th>GSF</th><th style="color:var(--teal)">DGSF</th><th>NASF</th><th style="color:var(--clrResearch)">Research Labs</th><th style="color:'+FICM.office+'">Faculty Office</th><th>Shared</th><th>Community</th><th>Event</th><th>Unassigned</th></tr>';
   for (var f = topFloor; f >= 2; f--) {
     var fk = String(f);
     var fLab = floorBreak[fk].lab;
@@ -2418,7 +2655,7 @@ function renderStacking(d) {
     // Exec summary: research floor % of departmental gross
     h += '<div style="margin-top:20px;padding-top:16px;border-top:1px solid var(--bdr)">';
     h += '<div style="font-weight:700;color:var(--navy);font-size:.95rem;margin-bottom:4px">Upper Research Floor Mix (% of Dept. Gross)</div>';
-    h += '<div style="font-size:.8rem;color:var(--mut);margin-bottom:10px">Program categories as percentage of departmental gross floor area (DGSF = GFA \u00d7 '+(S.deptGrossPct*100).toFixed(0)+'%) on a typical upper research floor.</div>';
+    h += '<div style="font-size:.8rem;color:var(--mut);margin-bottom:10px">Program categories as percentage of departmental gross floor area (DGSF = GSF \u00d7 '+(S.deptGrossPct*100).toFixed(0)+'%) on a typical upper research floor.</div>';
     h += '<table class="comp"><tr><th style="min-width:140px">Category</th>';
     S.scenarios.forEach(function(sc, i) {
       var thBorder = i === S.activeScenario ? 'box-shadow:inset 0 -3px 0 #fff;' : '';
@@ -2776,6 +3013,52 @@ function setCost(key, val) { S.cost[key] = parseFloat(val); render(); }
 function setCostInt(key, val) { S.cost[key] = parseInt(val); render(); }
 function setTypeRate(id, val) { S.cost.typeRates[id] = parseInt(val); render(); }
 function setCoreRate(name, val) { S.cost.coreRates[name] = parseInt(val); render(); }
+
+// v0.7: map a program line to a benchmark typology — sets that line's $/SF
+// rate to the benchmark's Q4 2025 value. mapType: 'type' | 'core' | 'cost' |
+// 'direct' (coreShellRate / siteRate live directly on S.cost).
+function _setBenchRate(mapType, key, benchKey) {
+  S.cost.benchMap = S.cost.benchMap || {};
+  var lineKey = mapType + ':' + key;
+  if (!benchKey) { delete S.cost.benchMap[lineKey]; render(); return; }   // "— custom —"
+  var b = (window.BENCH_RATES || []).filter(function(x){ return x.key === benchKey; })[0];
+  if (!b) return;
+  if (mapType === 'type')      { S.cost.typeRates = S.cost.typeRates || {}; S.cost.typeRates[key] = b.rate; }
+  else if (mapType === 'core') { S.cost.coreRates = S.cost.coreRates || {}; S.cost.coreRates[key] = b.rate; }
+  else                         { S.cost[key] = b.rate; }   // 'cost' + 'direct'
+  // Remember the EXACT benchmark chosen so the dropdown doesn't snap to another
+  // benchmark that happens to share the same $/SF (e.g. BioE / Optics-Int / Adv
+  // Imaging all = $646).
+  S.cost.benchMap[lineKey] = benchKey;
+  render();
+}
+// Build the benchmark mapping dropdown. Selection = the explicitly-chosen
+// benchmark (if its rate still matches the line's current rate); otherwise the
+// first benchmark matching the rate; otherwise "— custom —".
+function _benchSelect(mapType, key, currentRate) {
+  var rates = (window.BENCH_RATES || []);
+  var stored = (S.cost.benchMap || {})[mapType + ':' + key];
+  var selKey = null;
+  if (stored) {
+    var sb = rates.filter(function(x){ return x.key === stored; })[0];
+    if (sb && sb.rate === +currentRate) selKey = stored;   // honor explicit choice
+  }
+  if (!selKey) {
+    var m = rates.filter(function(x){ return x.rate === +currentRate; })[0];
+    if (m) selKey = m.key;
+  }
+  var opts = '';
+  rates.forEach(function(b){
+    opts += '<option value="'+b.key+'"'+(b.key === selKey ? ' selected' : '')+'>'+b.label+' ($'+b.rate+')</option>';
+  });
+  // When the rate matches no benchmark (e.g. tuned by a slider), show the live
+  // value in the custom option so the dropdown always reflects the rate.
+  var customLabel = selKey ? '— custom —' : ('— custom · $'+F(Math.round(+currentRate || 0))+' —');
+  opts = '<option value=""'+(selKey ? '' : ' selected')+'>'+customLabel+'</option>' + opts;
+  return '<select onchange="_setBenchRate(\''+mapType+'\',\''+key+'\',this.value)" '
+       + 'title="Map to NWU benchmark typology (Q4 2025 $/SF)" '
+       + 'style="margin-top:3px;font-size:.72rem;padding:2px 3px;max-width:165px;color:var(--navy)">'+opts+'</select>';
+}
 function setDeptGross(val) { S.deptGrossPct = parseFloat(val); render(); }
 function setBasementResearch(val) { S.basementResearchPct = parseFloat(val); render(); }
 function FM(n) { return '$' + F(Math.round(n)); }
@@ -2789,7 +3072,7 @@ function renderCost(d) {
   h += '<div class="card"><div class="card-title">Cost Summary</div>';
   h += '<div style="display:flex;gap:20px;flex-wrap:wrap;align-items:baseline">';
   h += '<div><span style="font-size:2rem;font-weight:900;color:var(--navy)">'+FMM(cs.projectCost)+'</span> <span style="font-size:.9rem;color:var(--mut)">Total Project Cost</span></div>';
-  h += '<div><span style="font-size:1.3rem;font-weight:700;color:var(--navy)">'+FMM(cs.postTariff)+'</span> <span style="font-size:.85rem;color:var(--mut)">Construction (Q4 '+S.cost.escalationYear+')</span></div>';
+  h += '<div><span style="font-size:1.3rem;font-weight:700;color:var(--navy)">'+FMM(cs.hardCost)+'</span> <span style="font-size:.85rem;color:var(--mut)">Hard Cost (Q4 '+S.cost.escalationYear+')</span></div>';
   h += '<div><span style="font-size:1.3rem;font-weight:700;color:var(--navy)">'+FMM(cs.constructionCost)+'</span> <span style="font-size:.85rem;color:var(--mut)">Base Construction (Q4 '+S.cost.baseYear+')</span></div>';
   h += '<div><span style="font-size:1.1rem;font-weight:600;color:var(--mut)">$'+F(Math.round(cs.constructionPerGSF))+'/GSF</span> <span style="font-size:.8rem;color:var(--mut)">(constr.)</span></div>';
   h += '<div><span style="font-size:1.1rem;font-weight:600;color:var(--mut)">$'+F(Math.round(cs.costPerGSF))+'/GSF</span> <span style="font-size:.8rem;color:var(--mut)">(project)</span></div>';
@@ -2797,7 +3080,7 @@ function renderCost(d) {
 
   // ── DGSF MODEL ──
   h += '<div class="card"><div class="card-title">Departmental Gross (DGSF) Model</div>';
-  h += '<div class="card-sub">DGSF = GSF \u00d7 Dept. Gross %. Program fitout rates are applied against each type\u2019s pro-rata GFA share.</div>';
+  h += '<div class="card-sub">DGSF = GSF \u00d7 Dept. Gross %. Program fitout rates are applied against each type\u2019s pro-rata GSF share.</div>';
   h += '<label class="sl">Departmental Gross % of GSF</label>';
   h += '<div class="sl-row"><input type="range" min="0.70" max="0.95" step="0.01" value="'+S.deptGrossPct+'" oninput="setDeptGross(this.value)"><div class="sl-val">'+(S.deptGrossPct*100).toFixed(0)+'%</div></div>';
   h += '<div style="display:flex;gap:16px;flex-wrap:wrap;margin-top:8px;padding:12px;background:var(--bg);border-radius:10px;font-family:\'IBM Plex Mono\',monospace;font-size:.88rem">';
@@ -2805,7 +3088,7 @@ function renderCost(d) {
   h += '<div>\u2192 <span style="font-weight:700;color:var(--teal)">'+F(cs.dgsf)+'</span> <span style="color:var(--mut)">DGSF ('+(S.deptGrossPct*100).toFixed(0)+'%)</span></div>';
   h += '<div>+ <span style="font-weight:700;color:var(--navy)">'+F(cs.mepGSF)+'</span> <span style="color:var(--mut)">MEP/Infra ('+((1-S.deptGrossPct)*100).toFixed(0)+'%)</span></div>';
   h += '</div>';
-  h += '<div style="margin-top:8px;font-size:.88rem;color:var(--mut)">NASF-to-GFA factor: <strong style="color:var(--navy)">' + cs.dgsfFactor.toFixed(3) + '\u00d7</strong> ('+F(d.totalNASF)+' NASF \u2192 '+F(cs.dgsf)+' DGSF)</div>';
+  h += '<div style="margin-top:8px;font-size:.88rem;color:var(--mut)">NASF-to-GSF factor: <strong style="color:var(--navy)">' + cs.dgsfFactor.toFixed(3) + '\u00d7</strong> ('+F(d.totalNASF)+' NASF \u2192 '+F(cs.dgsf)+' DGSF)</div>';
   h += '</div>';
 
   // ── COST DETAIL TABLE ──
@@ -2822,7 +3105,7 @@ function renderCost(d) {
   var clrSectionBg  = '#F4F0EC';   // soft cream for section bands
   var clrHeadBg     = '#F0EAE3';   // soft sand for header row
   var clrRule       = '#B7BCBF';   // stone for thin rules
-  var numStyle      = "font-family:'IBM Plex Mono','SF Mono',Consolas,monospace;font-variant-numeric:tabular-nums;font-weight:600;text-align:right;letter-spacing:0";
+  var numStyle      = "font-family:'IBM Plex Mono','SF Mono',Consolas,monospace;font-variant-numeric:tabular-nums;font-weight:600;text-align:center;letter-spacing:0";
   var labelStyle    = "font-family:'Sora','Helvetica Neue',Arial,sans-serif;font-weight:600";
   var sectionStyle  = "font-family:'Sora','Helvetica Neue',Arial,sans-serif;font-weight:800;color:var(--navy);font-size:.78rem;text-transform:uppercase;letter-spacing:.08em;background:"+clrSectionBg+";padding:8px 10px;border-top:1px solid "+clrRule+";border-bottom:1px solid "+clrRule;
 
@@ -2847,23 +3130,24 @@ function renderCost(d) {
   var totalNewFitout = 0;
   cs.progLines.forEach(function(p){ p._calc = _enrichRow(p); totalNewFitout += p._calc.fitoutCost; });
 
-  // v0.5.19: Cost Detail + Horizontal Waterfall in a 2-col row, equal height.
-  h += '<div class="cost-top-grid" style="display:grid;grid-template-columns:2fr 1fr;gap:12px;align-items:stretch;margin-bottom:12px">';
+  // v0.7: Cost Detail is full-width; the cost composition renders as a
+  // horizontal bar below it (single-column grid stacks them).
+  h += '<div class="cost-top-grid" style="display:grid;grid-template-columns:1fr;gap:12px;align-items:stretch;margin-bottom:12px">';
   h += '<div class="card"><div class="card-title">Cost Detail</div>';
-  h += '<div class="card-sub">DGSF = NASF + pro-rata circulation. GFA = DGSF + pro-rata building support. Circulation '+(circPct*100).toFixed(0)+'% and Building Support '+(bsPct*100).toFixed(0)+'% (of GFA) come from the Floor Stacking sliders. Core &amp; Shell + Site &amp; Demo are applied to total GSF; Fitout Cost = DGSF × $/DGSF rate.</div>';
+  h += '<div class="card-sub">DGSF = NASF + pro-rata circulation. GSF = DGSF + pro-rata building support. Circulation '+(circPct*100).toFixed(0)+'% and Building Support '+(bsPct*100).toFixed(0)+'% (of GSF) come from the Floor Stacking sliders. Core &amp; Shell + Site &amp; Demo are applied to total GSF; Fitout Cost = DGSF × $/DGSF rate.</div>';
   h += '<div style="overflow-x:auto">';
   h += '<table class="comp" style="background:transparent">';
   h += '<thead>';
   h += '<tr>';
   h += '<th style="min-width:220px;background:'+clrHeadBg+';color:var(--navy);text-transform:uppercase;letter-spacing:.05em;font-size:.78rem;text-align:left;border-bottom:1px solid '+clrRule+'">Program Category</th>';
-  h += '<th style="background:'+clrHeadBg+';color:var(--navy);text-transform:uppercase;letter-spacing:.05em;font-size:.78rem;text-align:right;border-bottom:1px solid '+clrRule+'">NASF</th>';
-  h += '<th style="background:'+clrHeadBg+';color:var(--navy);text-transform:uppercase;letter-spacing:.05em;font-size:.78rem;text-align:right;border-bottom:1px solid '+clrRule+'">% Total</th>';
-  h += '<th style="background:'+clrHeadBg+';color:'+clrCirc+';text-transform:uppercase;letter-spacing:.05em;font-size:.78rem;text-align:right;border-bottom:1px solid '+clrRule+'">Pro Rata Circ</th>';
-  h += '<th style="background:'+clrHeadBg+';color:var(--navy);text-transform:uppercase;letter-spacing:.05em;font-size:.78rem;text-align:right;border-bottom:1px solid '+clrRule+'">DGSF</th>';
-  h += '<th style="background:'+clrHeadBg+';color:var(--navy);text-transform:uppercase;letter-spacing:.05em;font-size:.78rem;text-align:right;border-bottom:1px solid '+clrRule+'">$/DGSF</th>';
-  h += '<th style="background:'+clrHeadBg+';color:var(--navy);text-transform:uppercase;letter-spacing:.05em;font-size:.78rem;text-align:right;border-bottom:1px solid '+clrRule+'">Cost</th>';
-  h += '<th style="background:'+clrHeadBg+';color:'+clrBS+';text-transform:uppercase;letter-spacing:.05em;font-size:.78rem;text-align:right;border-bottom:1px solid '+clrRule+'">Bldg Sup</th>';
-  h += '<th style="background:'+clrHeadBg+';color:'+clrBS+';text-transform:uppercase;letter-spacing:.05em;font-size:.78rem;text-align:right;border-bottom:1px solid '+clrRule+'">GFA</th>';
+  h += '<th style="background:'+clrHeadBg+';color:var(--navy);text-transform:uppercase;letter-spacing:.05em;font-size:.78rem;text-align:center;border-bottom:1px solid '+clrRule+'">NASF</th>';
+  h += '<th style="background:'+clrHeadBg+';color:var(--navy);text-transform:uppercase;letter-spacing:.05em;font-size:.78rem;text-align:center;border-bottom:1px solid '+clrRule+'">% Total</th>';
+  h += '<th style="background:'+clrHeadBg+';color:'+clrCirc+';text-transform:uppercase;letter-spacing:.05em;font-size:.78rem;text-align:center;border-bottom:1px solid '+clrRule+'">Pro Rata Circ</th>';
+  h += '<th style="background:'+clrHeadBg+';color:var(--navy);text-transform:uppercase;letter-spacing:.05em;font-size:.78rem;text-align:center;border-bottom:1px solid '+clrRule+'">DGSF</th>';
+  h += '<th style="background:'+clrHeadBg+';color:var(--navy);text-transform:uppercase;letter-spacing:.05em;font-size:.78rem;text-align:center;border-bottom:1px solid '+clrRule+'">$/DGSF</th>';
+  h += '<th style="background:'+clrHeadBg+';color:var(--navy);text-transform:uppercase;letter-spacing:.05em;font-size:.78rem;text-align:center;border-bottom:1px solid '+clrRule+'">Cost</th>';
+  h += '<th style="background:'+clrHeadBg+';color:'+clrBS+';text-transform:uppercase;letter-spacing:.05em;font-size:.78rem;text-align:center;border-bottom:1px solid '+clrRule+'">Bldg Sup</th>';
+  h += '<th style="background:'+clrHeadBg+';color:'+clrBS+';text-transform:uppercase;letter-spacing:.05em;font-size:.78rem;text-align:center;border-bottom:1px solid '+clrRule+'">GSF</th>';
   h += '</tr>';
   h += '</thead>';
   h += '<tbody>';
@@ -2880,7 +3164,9 @@ function renderCost(d) {
     row += '<td style="'+numStyle+';color:#5A5F66;font-weight:500">'+_fmtPct(e.pctOfTotal)+'</td>';
     row += '<td style="'+numStyle+';color:'+clrCirc+'">'+F(e.proRataCirc)+'</td>';
     row += '<td style="'+numStyle+';color:'+clrNASF+'">'+F(e.dgsfNew)+'</td>';
-    row += '<td style="'+numStyle+';color:'+clrNASF+'">$'+F(e.rateDGSF)+'</td>';
+    // v0.7: $/DGSF cell — value centered above the benchmark mapping dropdown.
+    row += '<td style="text-align:center"><div style="'+numStyle+';color:'+clrNASF+'">$'+F(e.rateDGSF)+'</div>'
+         + (p.mapType ? _benchSelect(p.mapType, p.mapKey, p.rate) : '') + '</td>';
     row += '<td style="'+numStyle+';color:'+clrNASF+'">'+FMM(e.fitoutCost)+'</td>';
     row += '<td style="'+numStyle+';color:'+clrBS+'">'+F(e.bldgSup)+'</td>';
     row += '<td style="'+numStyle+';color:'+clrBS+'">'+F(e.gfaNew)+'</td>';
@@ -2903,12 +3189,13 @@ function renderCost(d) {
       + '<td style="'+numStyle+';color:'+clrBS+';font-weight:700">'+F(sGFA)+'</td>'
       + '</tr>';
   }
-  function _gsfRow(label, rate, total) {
+  function _gsfRow(label, rate, total, mapKey) {
     return '<tr>'
       + '<td style="'+labelStyle+'">'+label+'</td>'
       + '<td colspan="2" style="'+numStyle+';color:#5A5F66;font-weight:500">'+F(d.totalGSF)+' GSF</td>'
       + '<td colspan="2"></td>'
-      + '<td style="'+numStyle+';color:'+clrNASF+'">$'+F(rate)+'/GSF</td>'
+      + '<td style="text-align:center"><div style="'+numStyle+';color:'+clrNASF+'">$'+F(rate)+'/GSF</div>'
+        + (mapKey ? _benchSelect('direct', mapKey, rate) : '') + '</td>'
       + '<td style="'+numStyle+';color:'+clrNASF+'">'+FMM(total)+'</td>'
       + '<td colspan="2" style="'+numStyle+';color:#5A5F66;font-weight:500">'+F(d.totalGSF)+' GSF</td>'
       + '</tr>';
@@ -2919,8 +3206,8 @@ function renderCost(d) {
 
   // ---- 1. CORE & SHELL + SITE (top, applied against total GSF) -----
   h += _section('Core & Shell + Site (applied to total GSF)');
-  h += _gsfRow('Core &amp; Shell', S.cost.coreShellRate, cs.totalCoreShell);
-  h += _gsfRow('Site &amp; Demo',   S.cost.siteRate,      cs.totalSite);
+  h += _gsfRow('Core &amp; Shell', S.cost.coreShellRate, cs.totalCoreShell, 'coreShellRate');
+  h += _gsfRow('Site &amp; Demo',   S.cost.siteRate,      cs.totalSite,      'siteRate');
   var shellSiteTotal = cs.totalCoreShell + cs.totalSite;
   h += '<tr style="background:'+clrSubBg+'">'
     + '<td style="padding-left:18px;'+labelStyle+';font-weight:700">Subtotal: Core &amp; Shell + Site</td>'
@@ -2977,9 +3264,8 @@ function renderCost(d) {
     + '</tr>';
   h += '</tbody></table></div></div>';
 
-  // ── Horizontal Cost Waterfall (sibling card, equal height) ──
-  // SVG-based, sized to the parent's height via CSS height:100%.
-  h += _skillBuildHorizontalWaterfall(d, cs);
+  // ── Cost Composition (horizontal stacked bar, full width below the table) ──
+  h += _skillBuildCostCompositionBar(d, cs);
   h += '</div>'; // close .cost-top-grid
 
 
@@ -2988,17 +3274,17 @@ function renderCost(d) {
   // LEFT COLUMN: Rate controls — Fitout first.
   h += '<div>';
 
-  // ── FITOUT RATES (consolidated) ───────────────────────────────────
-  // Restrained: no card bg fill, no sage band on section headers — just
-  // small uppercase Sora labels + a thin stone rule above each section.
-  // Keeps focus on the rate values and sliders.
+  // ── FITOUT RATES (editable table, wired to the Cost Detail dropdowns) ──
+  // v0.7.1: sliders replaced by a simple editable table — a $/SF number field
+  // plus the same benchmark-typology dropdown used in the Cost Detail table.
+  // Both write the same S.cost rate fields, so editing a value or remapping a
+  // category here updates the dropdown, the Cost Detail, and the cost math.
   h += '<div class="card"><div class="card-title">Fitout Rates ($/DGSF)</div>';
-  h += '<div class="card-sub">One row per program category. Each rate covers interiors, fit/equip, MEP &amp; general requirements; applied to that category\'s DGSF (NASF + pro-rata circulation).</div>';
+  h += '<div class="card-sub">One row per program category. Type a $/SF rate or pick a benchmark typology — either updates the Cost Detail and the calculated cost. Each rate covers interiors, fit/equip, MEP &amp; general requirements, applied to that category\'s DGSF.</div>';
   h += '<div style="overflow-x:auto"><table class="comp" style="background:transparent">';
   h += '<thead><tr>'
     +  '<th style="background:#F0EAE3;color:var(--navy);text-transform:uppercase;letter-spacing:.05em;font-size:.78rem;text-align:left;min-width:240px;border-bottom:1px solid #B7BCBF">Program Category</th>'
-    +  '<th style="background:#F0EAE3;color:var(--navy);text-transform:uppercase;letter-spacing:.05em;font-size:.78rem;text-align:right;width:100px;border-bottom:1px solid #B7BCBF">$/DGSF</th>'
-    +  '<th style="background:#F0EAE3;color:var(--navy);text-transform:uppercase;letter-spacing:.05em;font-size:.78rem;text-align:left;border-bottom:1px solid #B7BCBF">Edit</th>'
+    +  '<th style="background:#F0EAE3;color:var(--navy);text-transform:uppercase;letter-spacing:.05em;font-size:.78rem;text-align:center;width:130px;border-bottom:1px solid #B7BCBF">$/SF</th>'
     +  '</tr></thead><tbody>';
 
   function _rateRow(label, rate, oninput, opts) {
@@ -3006,22 +3292,22 @@ function renderCost(d) {
     var dot = opts.color ? '<span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:'+opts.color+';margin-right:8px;vertical-align:middle"></span>' : '';
     var pad = opts.indent ? 'style="padding-left:18px;font-family:\'Sora\',sans-serif;font-weight:600"'
                           : 'style="font-family:\'Sora\',sans-serif;font-weight:600"';
-    var min = opts.min || 100, max = opts.max || 1200, step = opts.step || 10;
     var row = '<tr>';
     row += '<td '+pad+'>'+dot+label+'</td>';
-    row += '<td style="font-family:\'IBM Plex Mono\',monospace;font-variant-numeric:tabular-nums;font-weight:700;text-align:right;color:var(--navy)">$'+F(rate)+'</td>';
-    row += '<td><input type="range" min="'+min+'" max="'+max+'" step="'+step+'" value="'+rate+'" oninput="'+oninput+'" style="width:220px"></td>';
+    // Editable $/SF — onchange (fires on blur/Enter) keeps focus while typing.
+    row += '<td style="text-align:center"><input type="number" min="0" step="10" value="'+rate+'" onchange="'+oninput+'" '
+         + 'style="width:100px;font-family:\'IBM Plex Mono\',monospace;font-weight:700;text-align:right;color:var(--navy);padding:5px 7px;border:1.5px solid var(--bdr);border-radius:6px"></td>';
     row += '</tr>';
     return row;
   }
   function _rateSection(label) {
-    return '<tr><td colspan="3" style="font-family:\'Sora\',sans-serif;font-weight:700;color:#5A5F66;font-size:.74rem;text-transform:uppercase;letter-spacing:.07em;padding:14px 10px 6px;border-top:1px solid #B7BCBF">'+label+'</td></tr>';
+    return '<tr><td colspan="2" style="font-family:\'Sora\',sans-serif;font-weight:700;color:#5A5F66;font-size:.74rem;text-transform:uppercase;letter-spacing:.07em;padding:14px 10px 6px;border-top:1px solid #B7BCBF">'+label+'</td></tr>';
   }
 
   h += _rateSection('Research — PI Typologies');
   S.types.forEach(function(t) {
     var rate = S.cost.typeRates[t.id] || 538;
-    h += _rateRow(t.label, rate, "setTypeRate('"+t.id+"',this.value)", { color: t.color, min:200, max:1200 });
+    h += _rateRow(t.label, rate, "setTypeRate('"+t.id+"',this.value)", { color: t.color, mapType:'type', mapKey:t.id });
   });
 
   var activeCoreItems = (S.coreItems || []).filter(function(c){ return c.on; });
@@ -3029,26 +3315,26 @@ function renderCost(d) {
     h += _rateSection('Shared Facilities');
     activeCoreItems.forEach(function(c) {
       var rate = S.cost.coreRates[c.name] || 538;
-      h += _rateRow(c.name, rate, "setCoreRate('"+c.name+"',this.value)", { indent:true, min:200, max:2500 });
+      h += _rateRow(c.name, rate, "setCoreRate('"+c.name+"',this.value)", { indent:true, mapType:'core', mapKey:c.name });
     });
   }
 
   h += _rateSection('Non-Research Program');
   var nonResRates = [
-    { key:'communityRate',       label:'Community',         min:100, max:800,  step:10 },
-    { key:'collaborationRate',   label:'Collaboration',     min:100, max:800,  step:10 },
-    { key:'eventRate',           label:'Event',             min:100, max:800,  step:10 },
-    { key:'classroomRate',       label:'Classroom',         min:100, max:800,  step:10 },
-    { key:'teachingLabRate',     label:'Teaching Lab',      min:200, max:1000, step:10 },
-    { key:'learningSupportRate', label:'Learning Support',  min:100, max:800,  step:10 },
-    { key:'officeEnclosedRate',  label:'Office (Enclosed)', min:100, max:800,  step:10 },
-    { key:'officeOpenRate',      label:'Office (Open)',     min:100, max:800,  step:10 },
-    { key:'officeSupportRate',   label:'Office Support',    min:100, max:800,  step:10 },
-    { key:'supportRate',         label:'Program Support',   min:50,  max:600,  step:10 }
+    { key:'communityRate',       label:'Community'         },
+    { key:'collaborationRate',   label:'Collaboration'     },
+    { key:'eventRate',           label:'Event'             },
+    { key:'classroomRate',       label:'Classroom'         },
+    { key:'teachingLabRate',     label:'Teaching Lab'      },
+    { key:'learningSupportRate', label:'Learning Support'  },
+    { key:'officeEnclosedRate',  label:'Office (Enclosed)' },
+    { key:'officeOpenRate',      label:'Office (Open)'     },
+    { key:'officeSupportRate',   label:'Office Support'    },
+    { key:'supportRate',         label:'Program Support'   }
   ];
   nonResRates.forEach(function(s) {
     var v = (S.cost[s.key] != null) ? S.cost[s.key] : 425;
-    h += _rateRow(s.label, v, "setCostInt('"+s.key+"',this.value)", { indent:true, min:s.min, max:s.max, step:s.step });
+    h += _rateRow(s.label, v, "setCostInt('"+s.key+"',this.value)", { indent:true, mapType:'cost', mapKey:s.key });
   });
 
   h += '</tbody></table></div>';
@@ -3073,37 +3359,42 @@ function renderCost(d) {
   h += '<div style="font-size:.82rem;color:var(--mut);text-align:right">= '+FMM(cs.totalSite)+'</div>';
   h += '</div>';
 
-  // Escalation
-  h += '<div class="card"><div class="card-title">Escalation</div>';
-  h += '<div class="card-sub">Compound annual escalation from Q'+S.cost.baseQuarter+' '+S.cost.baseYear+' to Q'+S.cost.escalationQuarter+' '+S.cost.escalationYear+'</div>';
-  h += '<label class="sl">Cost Basis Year</label>';
-  h += '<div class="sl-row"><input type="range" min="2024" max="2028" step="1" value="'+S.cost.baseYear+'" oninput="setCostInt(\'baseYear\',this.value)"><div class="sl-val">'+S.cost.baseYear+'</div></div>';
-  h += '<label class="sl">Midpoint Year</label>';
-  h += '<div class="sl-row"><input type="range" min="2025" max="2032" step="1" value="'+S.cost.escalationYear+'" oninput="setCostInt(\'escalationYear\',this.value)"><div class="sl-val">'+S.cost.escalationYear+'</div></div>';
-  h += '<label class="sl">Midpoint Quarter</label>';
-  h += '<div class="sl-row"><input type="range" min="1" max="4" step="1" value="'+S.cost.escalationQuarter+'" oninput="setCostInt(\'escalationQuarter\',this.value)"><div class="sl-val">Q'+S.cost.escalationQuarter+'</div></div>';
-  h += '<label class="sl">Annual Escalation Rate</label>';
-  h += '<div class="sl-row"><input type="range" min="0" max="0.12" step="0.005" value="'+S.cost.escalationRate+'" oninput="setCost(\'escalationRate\',this.value)"><div class="sl-val">'+(S.cost.escalationRate*100).toFixed(1)+'%</div></div>';
-  h += '<div style="margin-top:8px;padding:10px;background:var(--bg);border-radius:8px;font-family:\'IBM Plex Mono\',monospace;font-size:.85rem">';
-  h += '<div>'+cs.yearsToMid.toFixed(2)+' years \u00d7 '+(S.cost.escalationRate*100).toFixed(1)+'%/yr = <strong>'+((cs.escalationFactor-1)*100).toFixed(1)+'% escalation</strong></div>';
-  h += '<div style="margin-top:4px">Base: '+FMM(cs.constructionCost)+' \u2192 Escalated: <strong>'+FMM(cs.escalatedConstruction)+'</strong></div>';
-  h += '</div></div>';
+  // Project Cost Buildup (Northwestern Project Budget Breakdown)
+  function _pctRow(label, key, amount) {
+    var v = S.cost[key] || 0;
+    var s = '<div style="display:flex;justify-content:space-between;align-items:baseline;margin-top:8px"><label class="sl" style="margin:0">'+label+'</label>'
+          + '<span style="font-family:\'IBM Plex Mono\',monospace;font-size:.8rem;color:#5A5F66">'+(v*100).toFixed(1)+'% \u00b7 '+FMM(amount)+'</span></div>';
+    s += '<div class="sl-row"><input type="range" min="0" max="0.30" step="0.005" value="'+v+'" oninput="setCost(\''+key+'\',this.value)"><div class="sl-val">'+(v*100).toFixed(1)+'%</div></div>';
+    return s;
+  }
+  function _ladder(label, amount, opts) {
+    opts = opts || {};
+    return '<div style="display:flex;justify-content:space-between;align-items:baseline;padding:'+(opts.big?'8px 0':'5px 0')+';'
+      + (opts.rule ? 'border-top:2px solid var(--navy);' : 'border-top:1px dotted var(--bdr);')+'">'
+      + '<span style="font-weight:'+(opts.big?'800':'600')+';color:var(--navy);font-size:'+(opts.big?'1.02rem':'.9rem')+'">'+label+'</span>'
+      + '<span style="font-family:\'IBM Plex Mono\',monospace;font-weight:'+(opts.big?'800':'700')+';color:var(--navy);font-size:'+(opts.big?'1.02rem':'.9rem')+'">'+FMM(amount)+'</span></div>';
+  }
+  function _soft(key) { var x = (cs.softLines || []).filter(function(s){ return s.key === key; })[0]; return x ? x.amount : 0; }
 
-  // Tariff
-  h += '<div class="card"><div class="card-title">Tariff Premium</div>';
-  h += '<div class="card-sub">Applied after escalation to account for tariff impacts on materials</div>';
-  h += '<label class="sl">Tariff Premium</label>';
-  h += '<div class="sl-row"><input type="range" min="0" max="0.10" step="0.005" value="'+S.cost.tariffPct+'" oninput="setCost(\'tariffPct\',this.value)"><div class="sl-val">'+(S.cost.tariffPct*100).toFixed(1)+'%</div></div>';
-  h += '<div style="font-size:.85rem;color:var(--mut)">Tariff adder: '+FMM(cs.tariffCost)+' \u2192 Post-tariff: <strong>'+FMM(cs.postTariff)+'</strong></div>';
-  h += '</div>';
-
-  // Soft Costs
-  h += '<div class="card"><div class="card-title">Soft Costs</div>';
-  h += '<div class="card-sub">Multiplier applied to post-tariff construction cost (design, contingency, admin, etc.)</div>';
-  h += '<label class="sl">Soft Cost Multiplier</label>';
-  h += '<div class="sl-row"><input type="range" min="1.0" max="2.0" step="0.05" value="'+S.cost.softMultiplier+'" oninput="setCost(\'softMultiplier\',this.value)"><div class="sl-val">'+S.cost.softMultiplier.toFixed(2)+'x</div></div>';
-  h += '<div style="font-size:.85rem;color:var(--mut)">Soft costs = '+(((S.cost.softMultiplier-1)*100).toFixed(0))+'% of construction ('+ FMM(cs.postTariff * (S.cost.softMultiplier - 1)) +')</div>';
-  h += '<div style="font-weight:700;font-size:1.1rem;margin-top:8px;color:var(--navy)">Total Project Cost: '+FMM(cs.projectCost)+'</div>';
+  // % of total project. Helper to show each line's share of the project total.
+  function _pctOfProj(amount) { return cs.projectCost > 0 ? (amount/cs.projectCost*100) : 0; }
+  h += '<div class="card"><div class="card-title">Project Cost Buildup</div>';
+  h += '<div class="card-sub">Each markup is a share of total project cost, per the Northwestern Project Budget Breakdown (June 2026). Total = base construction \u00f7 (1 \u2212 \u03a3 markups). Every percentage is editable.</div>';
+  h += _ladder('Base Construction (Q'+S.cost.baseQuarter+' '+S.cost.baseYear+') \u00b7 '+_pctOfProj(cs.constructionCost).toFixed(0)+'%', cs.constructionCost, {rule:true});
+  h += '<div style="font-size:.74rem;text-transform:uppercase;letter-spacing:.06em;color:#5A5F66;font-weight:700;margin:12px 0 0">Hard Costs (% of total project)</div>';
+  h += _pctRow('Design Contingency', 'designContingencyPct', cs.designContingency);
+  h += _pctRow('Construction Contingency', 'constructionContingencyPct', cs.constructionContingency);
+  h += _pctRow('Escalation (4%/yr, 36mo.)', 'escalationPct', cs.escalationCost);
+  h += _ladder('Hard Cost \u00b7 '+_pctOfProj(cs.hardCost).toFixed(0)+'%', cs.hardCost, {big:true, rule:true});
+  h += '<div style="font-size:.74rem;text-transform:uppercase;letter-spacing:.06em;color:#5A5F66;font-weight:700;margin:14px 0 0">Soft Costs (% of total project)</div>';
+  h += _pctRow('Professional Services', 'professionalServicesPct', _soft('professionalServices'));
+  h += _pctRow('Owner Work', 'ownerWorkPct', _soft('ownerWork'));
+  h += _pctRow('Project Contingency', 'projectContingencyPct', _soft('projectContingency'));
+  h += _pctRow('Permits', 'permitsPct', _soft('permits'));
+  h += _pctRow('Project Management Fee', 'pmFeePct', _soft('pmFee'));
+  h += _ladder('Soft Costs Subtotal \u00b7 '+_pctOfProj(cs.softCostTotal).toFixed(0)+'%', cs.softCostTotal);
+  h += _ladder('Total Project Cost', cs.projectCost, {big:true, rule:true});
+  h += '<div style="font-size:.78rem;color:#9AA0A6;margin-top:6px;text-align:right">$'+F(Math.round(cs.costPerGSF))+'/GSF project \u00b7 $'+F(Math.round(cs.constructionPerGSF))+'/GSF hard</div>';
   h += '</div>';
 
   // (Cost Waterfall has been moved to a horizontal card next to Cost Detail.)
@@ -3142,6 +3433,11 @@ function renderCostScenarioCharts() {
   CAT_COLORS['support'] = 'var(--clrSupport)';
   CAT_COLORS['coreshell'] = 'var(--navy)';
   CAT_COLORS['site'] = 'var(--coral)';
+  // Project-cost markups (stacked above construction to reach total project cost)
+  CAT_COLORS['design']  = '#A7B4C2';
+  CAT_COLORS['constr']  = '#6E7E90';
+  CAT_COLORS['esc']     = '#FFE2C3';
+  CAT_COLORS['soft']    = '#5A5F66';
 
   var CAT_LABELS = {};
   S.types.forEach(function(t) { CAT_LABELS[t.id] = t.label; });
@@ -3151,10 +3447,15 @@ function renderCostScenarioCharts() {
   CAT_LABELS['support'] = 'Support';
   CAT_LABELS['coreshell'] = 'Core & Shell';
   CAT_LABELS['site'] = 'Site & Demo';
+  CAT_LABELS['design']  = 'Design Contingency';
+  CAT_LABELS['constr']  = 'Construction Contingency';
+  CAT_LABELS['esc']     = 'Escalation';
+  CAT_LABELS['soft']    = 'Soft Costs';
 
   // Ordered category keys for consistent stacking
   var catKeys = S.types.map(function(t){return t.id}).concat(['core','community','event','support']);
-  var costCatKeys = catKeys.concat(['coreshell','site']);
+  // Cost chart stacks the full project cost: construction parts + markups.
+  var costCatKeys = catKeys.concat(['coreshell','site','design','constr','esc','soft']);
 
   // Extract per-scenario data
   var scData = scenarios.map(function(sc) {
@@ -3196,6 +3497,11 @@ function renderCostScenarioCharts() {
     // C&S and Site (cost only — not area-based in the same way)
     costByType['coreshell'] = cc.totalCoreShell;
     costByType['site'] = cc.totalSite;
+    // Project-cost markups (sum to projectCost when added to the construction parts)
+    costByType['design'] = cc.designContingency || 0;
+    costByType['constr'] = cc.constructionContingency || 0;
+    costByType['esc']    = cc.escalationCost || 0;
+    costByType['soft']   = cc.softCostTotal || 0;
 
     return { name:sc.name, areaByType:areaByType, costByType:costByType,
              totalGSF:dd.totalGSF, constructionCost:cc.constructionCost, postTariff:cc.postTariff, projectCost:cc.projectCost };
@@ -3210,8 +3516,8 @@ function renderCostScenarioCharts() {
     if (cSum > maxCost) maxCost = cSum;
   });
 
-  var h = '<div class="card"><div class="card-title">Scenario Comparison: Program Area (GFA)</div>';
-  h += '<div class="card-sub">Stacked by space type. GFA = NASF \u00d7 DGSF factor. Hover for detail.</div>';
+  var h = '<div class="card"><div class="card-title">Scenario Comparison: Program Area (GSF)</div>';
+  h += '<div class="card-sub">Stacked by space type. GSF = NASF \u00d7 DGSF factor. Hover for detail.</div>';
 
   // SVG stacked bar chart — Area
   var barW = 90, barGap = 24, chartH = 280, padL = 60, padR = 20, padT = 30, padB = 80;
@@ -3236,7 +3542,7 @@ function renderCostScenarioCharts() {
       var segH = maxArea > 0 ? (val / maxArea) * chartH : 0;
       var yTop = padT + chartH - yOffset - segH;
       h += '<rect x="'+x+'" y="'+yTop.toFixed(1)+'" width="'+barW+'" height="'+Math.max(segH,0.5).toFixed(1)+'" fill="'+CAT_COLORS[k]+'" opacity="0.85">';
-      h += '<title>'+(CAT_LABELS[k]||k)+': '+F(val)+' GFA</title></rect>';
+      h += '<title>'+(CAT_LABELS[k]||k)+': '+F(val)+' GSF</title></rect>';
       yOffset += segH;
     });
     // Total label on top
@@ -3248,8 +3554,8 @@ function renderCostScenarioCharts() {
   h += '</svg></div></div>';
 
   // ── COST STACKED BAR ──
-  h += '<div class="card"><div class="card-title">Scenario Comparison: Construction Cost (Q4 '+S.cost.baseYear+')</div>';
-  h += '<div class="card-sub">Stacked by program fitout, core &amp; shell, and site. Base construction before escalation/tariff/soft costs.</div>';
+  h += '<div class="card"><div class="card-title">Scenario Comparison: Project Cost</div>';
+  h += '<div class="card-sub">Total project cost stacked by program fitout, core &amp; shell, site, contingencies, escalation, and soft costs.</div>';
 
   var svgW2 = padL + nBars * (barW + barGap) + padR;
   h += '<div style="overflow-x:auto"><svg width="'+svgW2+'" height="'+(chartH+padT+padB)+'" style="font-family:\'IBM Plex Mono\',monospace;font-size:10px">';
@@ -3274,9 +3580,9 @@ function renderCostScenarioCharts() {
       h += '<title>'+(CAT_LABELS[k]||k)+': '+FMM(val)+'</title></rect>';
       yOffset += segH;
     });
-    // Total + $/GSF on top
-    h += '<text x="'+(x+barW/2)+'" y="'+(padT+chartH-yOffset-12)+'" text-anchor="middle" font-weight="700" font-size="10" fill="var(--navy)">'+FMM(sc.constructionCost)+'</text>';
-    h += '<text x="'+(x+barW/2)+'" y="'+(padT+chartH-yOffset-2)+'" text-anchor="middle" font-size="9" fill="var(--mut)">$'+F(sc.totalGSF>0?Math.round(sc.constructionCost/sc.totalGSF):0)+'/SF</text>';
+    // Total + $/GSF on top (project cost)
+    h += '<text x="'+(x+barW/2)+'" y="'+(padT+chartH-yOffset-12)+'" text-anchor="middle" font-weight="700" font-size="10" fill="var(--navy)">'+FMM(sc.projectCost)+'</text>';
+    h += '<text x="'+(x+barW/2)+'" y="'+(padT+chartH-yOffset-2)+'" text-anchor="middle" font-size="9" fill="var(--mut)">$'+F(sc.totalGSF>0?Math.round(sc.projectCost/sc.totalGSF):0)+'/SF</text>';
     // Scenario label
     h += '<text x="'+(x+barW/2)+'" y="'+(padT+chartH+14)+'" text-anchor="middle" font-size="9" fill="var(--navy)" font-weight="600">'+sc.name.replace(/\s*\u2014\s*/,' ')+'</text>';
   });
@@ -3659,211 +3965,219 @@ function deleteScenario(i) {
 }
 function clearScenarios() { S.scenarios = []; S.activeScenario = -1; render(); }
 
+// v0.7.6: scenario picker shown at the top of every tab — select a scenario to
+// load its full state, or "Working state" to keep editing without a scenario.
+function loadScenarioFromPicker(v) {
+  var i = parseInt(v, 10);
+  if (isNaN(i) || i < 0) { S.activeScenario = -1; render(); return; }
+  loadScenario(i);   // applies the scenario's state, sets activeScenario, re-renders
+}
+function renderScenarioBar() {
+  var el = document.getElementById('scenarioBar');
+  if (!el) return;
+  var scs = S.scenarios || [];
+  if (!scs.length) { el.innerHTML = ''; return; }
+  var active = (S.activeScenario != null) ? S.activeScenario : -1;
+  var opts = '<option value="-1"'+(active < 0 ? ' selected' : '')+'>— Working state (no scenario) —</option>';
+  scs.forEach(function(sc, i) {
+    opts += '<option value="'+i+'"'+(i === active ? ' selected' : '')+'>'+(sc.name || ('Scenario '+(i+1)))+'</option>';
+  });
+  var loadedLabel = (active >= 0 && scs[active])
+    ? 'Loaded: <strong style="color:var(--navy)">'+scs[active].name+'</strong>'
+    : 'Editing working state';
+  el.innerHTML =
+      '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:8px 14px;margin:6px 0;'
+    +   'background:var(--bg);border:1px solid var(--bdr);border-radius:10px">'
+    + '<span style="font-size:.72rem;font-weight:800;color:var(--navy);text-transform:uppercase;letter-spacing:.06em">Scenario</span>'
+    + '<select id="scenarioPicker" onchange="loadScenarioFromPicker(this.value)" '
+    +   'style="font-size:.9rem;font-weight:600;padding:5px 9px;border:1.5px solid var(--bdr);border-radius:6px;color:var(--navy);min-width:260px">'+opts+'</select>'
+    + '<button class="btn btn-navy btn-sm" onclick="loadScenarioFromPicker(document.getElementById(\'scenarioPicker\').value)">Load</button>'
+    + '<span style="font-size:.78rem;color:var(--mut)">'+loadedLabel+'</span>'
+    + '</div>';
+}
+
 // ============================================================
 // PRESET SCENARIOS — built on init
 // ============================================================
 function buildPresetScenarios() {
+  function _setTypePis(id, n){ var t=(S.types||[]).filter(function(x){return x.id===id;})[0]; if(t) t.pis=n; }
+  function _setTypeDef(id, ol, ls, dk, fac, flex){ var t=(S.types||[]).filter(function(x){return x.id===id;})[0]; if(t){ t.fteCount=8; t.openLabPerFTE=ol; t.labSupportPerFTE=ls; t.deskPerFTE=dk; t.facultyOffice=fac; t.flexOffice=flex; } }
   var presets = [
     {
-      name: '1 \u2014 Baseline Scenario',
-      desc: 'Crosswalk-proportional mix matching McCormick research distribution: Wet Bio 34%, Wet Chem 17%, Dry/Comp 33%, Optics 12%, Clean Room 5%. 30 PIs, 22% core.',
+      name: "0 — Bare Minimum",
+      desc: "30 PIs (bsmt 4 / L2 7 / L3 10 / L4 9). No cleanroom or shared core. 166K GSF.",
       tweaks: function() {
-        S.types[0].pis=8;  S.types[1].pis=2;  S.types[2].pis=10;
-        S.types[3].pis=4;  S.types[4].pis=3;  S.types[5].pis=1; S.types[6].pis=2;
+        _setTypeDef('wetbio',70,70,45,135,30);
+        _setTypeDef('wetchem',120,60,45,135,30);
+        _setTypeDef('drywkshp',70,50,45,135,30);
+        _setTypeDef('comp',0,0,60,135,30);
+        _setTypeDef('optics',0,140,45,135,30);
+        _setTypeDef('optnano',180,40,85,135,30);
+        _setTypePis('wetbio',4);
+        _setTypePis('wetchem',8);
+        _setTypePis('drywkshp',6);
+        _setTypePis('comp',1);
+        _setTypePis('optics',7);
+        _setTypePis('optnano',4);
         S.totalPIs = 30;
-        // Fit GF: Eng Learn 4500→2750 (GF programs 21000→19250 = gfNASF)
-        S.gfProgram[3].nasf = 2750;
-        // Fit Bsmt: Battery 3000→1750 (core 19000→17750 = basementNASF)
-        S.coreItems[4].nasf = 1750;
+        S.basementGSF=30000; S.aboveGradeGSF=28000; S.groundFloorGSF=28000; S.penthouseGSF=24000; S.aboveGradeFloors=4; S.penthouseEff=0;
+        S.gfProgram = [{"name": "Classrooms (4×40-Seat)", "nasf": 4800, "on": true, "cat": "classroom", "floor": "ground", "qty": 4, "nasf_each": 1200}, {"name": "Colloquium / Flex, 100p at Round Tables", "nasf": 2000, "on": true, "cat": "event", "floor": "ground", "qty": 1, "nasf_each": 2000}, {"name": "Engineering Commons", "nasf": 3200, "on": true, "cat": "community", "floor": "ground", "qty": 1, "nasf_each": 3200}, {"name": "Cafe", "nasf": 1800, "on": true, "cat": "community", "floor": "ground", "qty": 1, "nasf_each": 1800}, {"name": "School / Department Administration", "nasf": 2400, "on": true, "cat": "office_enclosed", "floor": "ground", "qty": 1, "nasf_each": 2400, "occupancy_each": 12}, {"name": "Loading Dock", "nasf": 2000, "on": true, "cat": "support", "floor": "ground", "qty": 1, "nasf_each": 2000}, {"name": "Building Support (IT, Storage, etc.)", "nasf": 1400, "on": true, "cat": "support", "floor": "basement", "qty": 1, "nasf_each": 1400}, {"name": "Servery/ Cafe Support", "nasf": 300, "on": true, "cat": "support", "floor": "ground", "qty": 1, "nasf_each": 300}, {"name": "Event Storage", "nasf": 500, "on": true, "cat": "support", "floor": "ground", "qty": 1, "nasf_each": 500}];
+        S.upperCommunity = [{"name": "Informal Meeting", "nasf": 925, "on": true, "cat": "collaboration", "floor": "upper", "qty": 1, "nasf_each": 925}, {"name": "Huddle Room", "nasf": 780, "on": true, "cat": "collaboration", "floor": "upper", "qty": 1, "nasf_each": 780}, {"name": "Pantry", "nasf": 350, "on": true, "cat": "collaboration", "floor": "upper", "qty": 1, "nasf_each": 350}, {"name": "Meeting Room (8-10)", "nasf": 840, "on": true, "cat": "collaboration", "floor": "upper", "qty": 1, "nasf_each": 840}, {"name": "Wellness/Lactation", "nasf": 100, "on": true, "cat": "collaboration", "floor": "upper", "qty": 1, "nasf_each": 100}];
+        S.coreItems = [{"name": "Advanced Imaging / Characterization", "nasf": 3000, "on": true, "qty": 1, "nasf_each": 3000, "floor": "basement"}, {"name": "Shared Instrumentation / Fabrication", "nasf": 3000, "on": true, "qty": 1, "nasf_each": 3000, "floor": "basement"}];
+        S.basementAllocation = {"wetbio": 0, "wetchem": 4, "drywkshp": 0, "comp": 0, "optics": 0, "optnano": 0};
+        S.piFloorAllocation = {"2": {"wetbio": 3, "wetchem": 4, "drywkshp": 0, "comp": 0, "optics": 0, "optnano": 0}, "3": {"wetbio": 1, "wetchem": 0, "drywkshp": 5, "comp": 0, "optics": 0, "optnano": 4}, "4": {"wetbio": 0, "wetchem": 0, "drywkshp": 1, "comp": 1, "optics": 7, "optnano": 0}};
       }
     },
     {
-      // Baseline V2 \u2014 mirrors the 2026-04-28 (rev 1) dashboard JSON capture.
-      // Demonstrates the new floor-level controls: per-floor PI assignment and
-      // per-floor placement of upper community/event items (Farley on F2,
-      // Clubs on F3, Dean's Suite on F4 \u2014 instead of repeating uniformly).
-      // Differs from Baseline V1 in:
-      //   \u2022 Ground floor efficiency 0.55 \u2192 0.70 (more usable GF NASF)
-      //   \u2022 Larger basement (40,000 GSF) and slightly smaller upper plate
-      //     (34,000 GSF) than V1
-      //   \u2022 Refined GF program with Lobby Seating added and 4 Classrooms
-      //     (instead of 2)
-      //   \u2022 Expanded upper-community list with Farley/Clubs/Dean's Suite as
-      //     floor-specific anchors
-      name: '1B \u2014 Baseline Scenario V2',
-      desc: 'Per-floor PI assignment + per-floor upper program placement (Meeting Room & Farley on F2, Clubs on F3, Dean\'s Suite on F4). Mirrors the 2026-04-28 (rev 1) capture: 40K basement, 34K upper plates, refined GF program (Eng Commons, Colloquium, Cafe, 4 Classrooms, Loading, Bldg Support, Lobby Seating). 30 PIs, 22% core.',
+      name: "1 — Basic Building",
+      desc: "37 PIs (bsmt 6 / 9 / 11 / 11). 4K cleanroom + two 3K shared facilities. 203K GSF.",
       tweaks: function() {
-        // Envelope (matches imported JSON top-level state)
-        S.basementGSF = 40000;
-        S.aboveGradeGSF = 34000;
-        S.penthouseGSF = 24500;
-        S.aboveGradeFloors = 4;
-        S.basementEff = 0.50;
-        S.aboveGradeEff = 0.70;
-        S.groundFloorEff = 0.70;  // bumped from 0.55 in V1
-        S.penthouseEff = 0.0;
-        // PI mix (same crosswalk as V1)
-        S.types[0].pis=8;  S.types[1].pis=2;  S.types[2].pis=10;
-        S.types[3].pis=4;  S.types[4].pis=3;  S.types[5].pis=1; S.types[6].pis=2;
-        S.totalPIs = 30;
-        // Ground-floor program (7 items from the JSON capture, Lobby Seating new)
-        S.gfProgram = [
-          { name:'Eng Commons',                                nasf:4000, on:true,  cat:'community' },
-          { name:'Colloquium / Flex, 100p at Round Tables',    nasf:4000, on:true,  cat:'event'     },
-          { name:'Cafe',                                       nasf:1900, on:true,  cat:'community' },
-          { name:'4 Classrooms, 40 Seats each',                nasf:4800, on:true,  cat:'event'     },
-          { name:'Loading',                                    nasf:2000, on:true,  cat:'support'   },
-          { name:'Bldg Support (Storage, IT, Ops)',            nasf:2000, on:true,  cat:'support'   },
-          { name:'Lobby Seating',                              nasf:2000, on:true,  cat:'community' }
-        ];
-        // Upper-floor program (8 items from JSON capture). Farley/Clubs/Dean's
-        // are large per-floor anchors \u2014 Farley & Meeting Room on F2 (collab
-        // adjacency to ground), Clubs on F3, Dean's Suite on F4. The smaller
-        // amenities (lounge, focus, pantry, wellness) repeat on every floor.
-        // Categories: large gathering/event-style spaces are tagged 'event' so
-        // they roll into the building-wide Event NASF and render in the Event
-        // color on the floor stack. Lounge/focus/pantry/wellness are
-        // 'community'.
-        S.upperCommunity = [
-          { name:'Living Room / Lounge',                       nasf:800,  on:true, floor:'all', cat:'community' },
-          { name:'Focus Room (2 People)',                      nasf:600,  on:true, floor:'all', cat:'community' },
-          { name:'Pantry',                                     nasf:500,  on:true, floor:'all', cat:'community' },
-          { name:'Meeting Room (8-10) People',                 nasf:850,  on:true, floor:'2',   cat:'community' },
-          { name:'Wellness Room/ Lactation Room',              nasf:100,  on:true, floor:'all', cat:'community' },
-          { name:'Farley Center',                              nasf:2000, on:true, floor:'2',   cat:'event'     },
-          { name:'Clubs',                                      nasf:5000, on:true, floor:'3',   cat:'event'     },
-          { name:'Dean\'s Suite',                              nasf:3000, on:true, floor:'4',   cat:'community' }
-        ];
-        // Per-floor PI assignment from the JSON capture (excludes basement-
-        // only PIs). Floor 4 leans dry/comp; Floor 2 keeps the higher-intensity
-        // wet/optics group adjacent to basement core.
-        //   wetbio  pool = 8 - 3 = 5  \u2192  F2:2 + F3:2 + F4:1 = 5
-        //   wetchem pool = 0 (basement over-allocates)
-        //   dryelec pool = 10        \u2192  F2:2 + F3:3 + F4:5 = 10
-        //   comp    pool = 4         \u2192  F2:0 + F3:1 + F4:3 = 4
-        //   optics  pool = 1         \u2192  F2:1
-        //   optnano pool = 0 (basement over-allocates)
-        //   large   pool = 2         \u2192  F2:1 + F3:1
-        S.piFloorAllocation = {
-          '2': { wetbio:2, wetchem:0, drywkshp:2, comp:0, optics:1, optnano:0, lglab:1 },
-          '3': { wetbio:2, wetchem:0, drywkshp:3, comp:1, optics:0, optnano:0, lglab:1 },
-          '4': { wetbio:1, wetchem:0, drywkshp:5, comp:3, optics:0, optnano:0, lglab:0 }
-        };
-        S.basementAllocation = { wetbio:3, wetchem:3, drywkshp:0, comp:0, optics:2, optnano:2, lglab:0 };
-        // Shared item adjustment (matches Baseline tweak \u2014 Battery scaled to
-        // basement capacity)
-        S.coreItems[4].nasf = 1750;
-      }
-    },
-    {
-      name: '2 \u2014 Aspirational Peers',
-      desc: 'Peer top-5 FTE medians: Wet PI+10, Comp PI+6, Large PI+20. One large lab freed for an additional wet bio PI.',
-      tweaks: function() {
-        S.types[0].fteCount=10; // Wet Bio PI+10
-        S.types[1].fteCount=10; // Wet Chem PI+10
-        S.types[2].fteCount=8;  // Dry PI+8 (no change)
-        S.types[3].fteCount=6;  // Comp PI+6
-        S.types[4].fteCount=8;  // Optics PI+8 (no change)
-        S.types[5].fteCount=8;  // Nano PI+8 (no change)
-        S.types[6].fteCount=20; // Large Lab PI+20
-        S.types[0].pis=10; S.types[1].pis=5; S.types[2].pis=6;
-        S.types[3].pis=2; S.types[4].pis=4; S.types[5].pis=2; S.types[6].pis=1;
-        S.totalPIs = 30;
-        // Fit GF: Eng Learn 4500→2750 (GF programs 21000→19250 = gfNASF)
-        S.gfProgram[3].nasf = 2750;
-        // Fit Bsmt: Battery 3000→1750 (core 19000→17750 = basementNASF)
-        S.coreItems[4].nasf = 1750;
-      }
-    },
-    {
-      name: '3 \u2014 Max PI Capacity',
-      desc: 'Smallest basement (19K), largest floor plates (38,500 GSF). Lean core sized to basement + bigger research floors push to 37 PIs at ~100% utilization.',
-      tweaks: function() {
-        // Envelope: shrink basement, grow upper floors; penthouse = 70% of floor plate
-        S.aboveGradeGSF = 38500;
-        S.penthouseGSF = 26950;
-        S.basementGSF = 19050;
-        // Lean core sized to fit basement (19050×0.50 = 9525 NASF)
-        S.corePct = 0.12;
-        S.coreItems[0].nasf = 3500; S.coreItems[0].on = true;  // Imaging (reduced)
-        S.coreItems[1].nasf = 2500; S.coreItems[1].on = true;  // Shared Instrumentation (reduced)
-        S.coreItems[2].nasf = 2000; S.coreItems[2].on = true;  // Flex Lab (reduced)
-        S.coreItems[3].on = false; // Robotics off
-        S.coreItems[4].nasf = 1525; S.coreItems[4].on = true;  // Battery (reduced)
-        S.coreItems[5].on = false; // Structural off
-        S.coreItems[6].on = false; // Simulation off
-        S.coreItems[7].on = false; // Anechoic off
-        // 37 PIs — proportional ratios, Large fixed at 2
-        S.types[0].pis=8;  // Wet Bio
-        S.types[1].pis=8;  // Wet Chem
-        S.types[2].pis=7;  // Dry Elec
-        S.types[3].pis=6;  // Comp
-        S.types[4].pis=3;  // Optics
-        S.types[5].pis=3;  // Nano
-        S.types[6].pis=2;  // Large
+        _setTypeDef('wetbio',70,70,45,135,30);
+        _setTypeDef('wetchem',120,60,45,135,30);
+        _setTypeDef('drywkshp',70,50,45,135,30);
+        _setTypeDef('comp',0,0,60,135,30);
+        _setTypeDef('optics',0,140,45,135,30);
+        _setTypeDef('optnano',180,40,85,135,30);
+        _setTypePis('wetbio',7);
+        _setTypePis('wetchem',9);
+        _setTypePis('drywkshp',7);
+        _setTypePis('comp',1);
+        _setTypePis('optics',7);
+        _setTypePis('optnano',6);
         S.totalPIs = 37;
-        S.basementResearchPct = 0;
+        S.basementGSF=36000; S.aboveGradeGSF=34000; S.groundFloorGSF=39000; S.penthouseGSF=26000; S.aboveGradeFloors=4; S.penthouseEff=0;
+        S.gfProgram = [{"name": "Classrooms (4×40-Seat)", "nasf": 4800, "on": true, "cat": "classroom", "floor": "ground", "qty": 4, "nasf_each": 1200}, {"name": "Clubs", "nasf": 2000, "on": true, "cat": "event", "floor": "ground", "qty": 1, "nasf_each": 2000}, {"name": "Colloquium / Flex, 100p at Round Tables", "nasf": 4000, "on": true, "cat": "event", "floor": "ground", "qty": 1, "nasf_each": 4000}, {"name": "Cleanroom", "nasf": 4000, "on": true, "cat": "event", "floor": "ground", "qty": 1, "nasf_each": 4000}, {"name": "Engineering Commons", "nasf": 3450, "on": true, "cat": "community", "floor": "ground", "qty": 1, "nasf_each": 3450}, {"name": "Cafe", "nasf": 1800, "on": true, "cat": "community", "floor": "ground", "qty": 1, "nasf_each": 1800}, {"name": "School / Department Administration", "nasf": 2400, "on": true, "cat": "office_enclosed", "floor": "ground", "qty": 1, "nasf_each": 2400, "occupancy_each": 12}, {"name": "Loading Dock", "nasf": 2000, "on": true, "cat": "support", "floor": "ground", "qty": 1, "nasf_each": 2000}, {"name": "Building Support (IT, Storage, etc.)", "nasf": 1400, "on": true, "cat": "support", "floor": "basement", "qty": 1, "nasf_each": 1400}, {"name": "Event Storage", "nasf": 500, "on": true, "cat": "support", "floor": "ground", "qty": 1, "nasf_each": 500}];
+        S.upperCommunity = [{"name": "Informal Meeting", "nasf": 925, "on": true, "cat": "collaboration", "floor": "upper", "qty": 1, "nasf_each": 925}, {"name": "Huddle Room", "nasf": 780, "on": true, "cat": "collaboration", "floor": "upper", "qty": 1, "nasf_each": 780}, {"name": "Pantry", "nasf": 350, "on": true, "cat": "collaboration", "floor": "upper", "qty": 1, "nasf_each": 350}, {"name": "Meeting Room (8-10)", "nasf": 840, "on": true, "cat": "collaboration", "floor": "upper", "qty": 1, "nasf_each": 840}, {"name": "Wellness/Lactation", "nasf": 100, "on": true, "cat": "collaboration", "floor": "upper", "qty": 1, "nasf_each": 100}];
+        S.coreItems = [{"name": "SHELL SPACE", "nasf": 3000, "on": true, "qty": 1, "nasf_each": 3000, "floor": "basement"}, {"name": "SHELL SPACE", "nasf": 3000, "on": true, "qty": 1, "nasf_each": 3000, "floor": "basement"}];
+        S.basementAllocation = {"wetbio": 0, "wetchem": 6, "drywkshp": 0, "comp": 0, "optics": 0, "optnano": 0};
+        S.piFloorAllocation = {"2": {"wetbio": 6, "wetchem": 3, "drywkshp": 0, "comp": 0, "optics": 0, "optnano": 0}, "3": {"wetbio": 1, "wetchem": 0, "drywkshp": 4, "comp": 0, "optics": 0, "optnano": 6}, "4": {"wetbio": 0, "wetchem": 0, "drywkshp": 3, "comp": 1, "optics": 7, "optnano": 0}};
       }
     },
     {
-      name: '4 \u2014 Leverage Basement',
-      desc: 'Moderate basement (31K) with 35% invested as high-intensity research space. Lean core sized to basement, reduced GF program + upper community, 37 PIs at ~100% utilization.',
+      name: "2a — Basic Building + 4K Cleanroom",
+      desc: "37 PIs. 4,000 NSF cleanroom on the ground floor. 205K GSF.",
       tweaks: function() {
-        // Envelope: larger basement for research investment; penthouse = 70% of floor plate
-        S.aboveGradeGSF = 36000;
-        S.penthouseGSF = 25200;
-        S.basementGSF = 30800;
-        // Lean core sized so 85% fits in basement alongside 35% research
-        // Basement NASF=15400, research=5390, available for core=10010 → core×0.85≤10010 → core≤11776
-        S.corePct = 0.12;
-        S.coreItems[0].nasf = 4525; S.coreItems[0].on = true;  // Imaging
-        S.coreItems[1].nasf = 2715; S.coreItems[1].on = true;  // Shared Instrumentation
-        S.coreItems[2].nasf = 2715; S.coreItems[2].on = true;  // Flex Lab
-        S.coreItems[3].on = false; // Robotics off
-        S.coreItems[4].nasf = 1815; S.coreItems[4].on = true;  // Battery
-        S.coreItems[5].on = false; // Structural off
-        S.coreItems[6].on = false; // Simulation off
-        S.coreItems[7].on = false; // Anechoic off
-        // Shared concentrated in basement
-        S.coreFloorSplit = { basement:0.85, ground:0.15, research:0.0 };
-        // 35% of basement NASF as high-intensity research
-        S.basementResearchPct = 0.35;
-        // Fit GF: core on GF = 1766, so programs must ≤ 18034 → Eng Learn 4500→1534
-        S.gfProgram[3].nasf = 1534;
-        // Fit upper floors: reduce meeting rooms so community fits (25200 capacity)
-        S.upperCommunity[1].nasf = 1748;
-        // 37 PIs
-        S.types[0].pis=8; S.types[1].pis=8; S.types[2].pis=8;
-        S.types[3].pis=6; S.types[4].pis=3; S.types[5].pis=2; S.types[6].pis=2;
+        _setTypeDef('wetbio',70,70,45,135,30);
+        _setTypeDef('wetchem',120,60,45,135,30);
+        _setTypeDef('drywkshp',70,50,45,135,30);
+        _setTypeDef('comp',0,0,60,135,30);
+        _setTypeDef('optics',0,140,45,135,30);
+        _setTypeDef('optnano',180,40,85,135,30);
+        _setTypePis('wetbio',7);
+        _setTypePis('wetchem',9);
+        _setTypePis('drywkshp',7);
+        _setTypePis('comp',1);
+        _setTypePis('optics',7);
+        _setTypePis('optnano',6);
         S.totalPIs = 37;
+        S.basementGSF=36000; S.aboveGradeGSF=34000; S.groundFloorGSF=41000; S.penthouseGSF=26000; S.aboveGradeFloors=4; S.penthouseEff=0;
+        S.gfProgram = [{"name": "Classrooms (4×40-Seat)", "nasf": 4800, "on": true, "cat": "classroom", "floor": "ground", "qty": 4, "nasf_each": 1200}, {"name": "Clubs", "nasf": 2000, "on": true, "cat": "event", "floor": "ground", "qty": 1, "nasf_each": 2000}, {"name": "Colloquium / Flex, 100p at Round Tables", "nasf": 4000, "on": true, "cat": "event", "floor": "ground", "qty": 1, "nasf_each": 4000}, {"name": "Cleanroom", "nasf": 4000, "on": true, "cat": "event", "floor": "ground", "qty": 1, "nasf_each": 4000}, {"name": "Engineering Commons", "nasf": 3450, "on": true, "cat": "community", "floor": "ground", "qty": 1, "nasf_each": 3450}, {"name": "Cafe", "nasf": 1800, "on": true, "cat": "community", "floor": "ground", "qty": 1, "nasf_each": 1800}, {"name": "School / Department Administration", "nasf": 2400, "on": true, "cat": "office_enclosed", "floor": "ground", "qty": 1, "nasf_each": 2400, "occupancy_each": 12}, {"name": "Loading Dock", "nasf": 2000, "on": true, "cat": "support", "floor": "ground", "qty": 1, "nasf_each": 2000}, {"name": "Building Support (IT, Storage, etc.)", "nasf": 1400, "on": true, "cat": "support", "floor": "basement", "qty": 1, "nasf_each": 1400}, {"name": "Event Storage", "nasf": 500, "on": true, "cat": "support", "floor": "ground", "qty": 1, "nasf_each": 500}];
+        S.upperCommunity = [{"name": "Informal Meeting", "nasf": 925, "on": true, "cat": "collaboration", "floor": "upper", "qty": 1, "nasf_each": 925}, {"name": "Huddle Room", "nasf": 780, "on": true, "cat": "collaboration", "floor": "upper", "qty": 1, "nasf_each": 780}, {"name": "Pantry", "nasf": 350, "on": true, "cat": "collaboration", "floor": "upper", "qty": 1, "nasf_each": 350}, {"name": "Meeting Room (8-10)", "nasf": 840, "on": true, "cat": "collaboration", "floor": "upper", "qty": 1, "nasf_each": 840}, {"name": "Wellness/Lactation", "nasf": 100, "on": true, "cat": "collaboration", "floor": "upper", "qty": 1, "nasf_each": 100}];
+        S.coreItems = [{"name": "SHELL SPACE", "nasf": 3000, "on": true, "qty": 1, "nasf_each": 3000, "floor": "basement"}, {"name": "SHELL SPACE", "nasf": 3000, "on": true, "qty": 1, "nasf_each": 3000, "floor": "basement"}];
+        S.basementAllocation = {"wetbio": 0, "wetchem": 6, "drywkshp": 0, "comp": 0, "optics": 0, "optnano": 0};
+        S.piFloorAllocation = {"2": {"wetbio": 6, "wetchem": 3, "drywkshp": 0, "comp": 0, "optics": 0, "optnano": 0}, "3": {"wetbio": 1, "wetchem": 0, "drywkshp": 4, "comp": 0, "optics": 0, "optnano": 6}, "4": {"wetbio": 0, "wetchem": 0, "drywkshp": 3, "comp": 1, "optics": 7, "optnano": 0}};
       }
     },
     {
-      name: '5 \u2014 Wet Lab Focus',
-      desc: 'Zero computational PIs (housed in existing bldgs). Reduced basement (24K), bigger plates (37,500) for wet lab adjacency. Shared scaled to fit basement. 29 PIs.',
+      name: "2b — Basic Building + 10K Cleanroom",
+      desc: "37 PIs. 10,000 NSF cleanroom (Clubs/Colloquium/Farley/Career dropped). 205K GSF.",
       tweaks: function() {
-        // Envelope: moderate basement reduction, bigger plates; penthouse = 70% of floor plate
-        S.aboveGradeGSF = 37500;
-        S.penthouseGSF = 26250;
-        S.basementGSF = 23750;
-        // Shared scaled to fit basement (23750×0.50 = 11875 NASF)
-        S.coreItems[0].nasf = 3750;  // Imaging (scaled)
-        S.coreItems[1].nasf = 3750;  // Shared Instrumentation (scaled)
-        S.coreItems[2].nasf = 2500;  // Flex Lab (scaled)
-        S.coreItems[4].nasf = 1875;  // Battery (scaled)
-        // Fit GF: Eng Learn 4500→4125 (GF programs 21000→20625 = gfNASF)
-        S.gfProgram[3].nasf = 4125;
-        // 29 PIs — all purpose-built lab types, wet chem leads
-        S.types[0].pis=7;  // Wet Bio
-        S.types[1].pis=8;  // Wet Chem
-        S.types[2].pis=6;  // Dry Elec
-        S.types[3].pis=0;  // Computational → 0
-        S.types[4].pis=3;  // Optics
-        S.types[5].pis=3;  // Nano
-        S.types[6].pis=2;  // Large
-        S.totalPIs = 29;
+        _setTypeDef('wetbio',70,70,45,135,30);
+        _setTypeDef('wetchem',120,60,45,135,30);
+        _setTypeDef('drywkshp',70,50,45,135,30);
+        _setTypeDef('comp',0,0,60,135,30);
+        _setTypeDef('optics',0,140,45,135,30);
+        _setTypeDef('optnano',180,40,85,135,30);
+        _setTypePis('wetbio',7);
+        _setTypePis('wetchem',9);
+        _setTypePis('drywkshp',7);
+        _setTypePis('comp',1);
+        _setTypePis('optics',7);
+        _setTypePis('optnano',6);
+        S.totalPIs = 37;
+        S.basementGSF=36000; S.aboveGradeGSF=34000; S.groundFloorGSF=41000; S.penthouseGSF=26000; S.aboveGradeFloors=4; S.penthouseEff=0;
+        S.gfProgram = [{"name": "Classrooms (4×40-Seat)", "nasf": 4800, "on": true, "cat": "classroom", "floor": "ground", "qty": 4, "nasf_each": 1200}, {"name": "Cleanroom", "nasf": 10000, "on": true, "cat": "event", "floor": "ground", "qty": 1, "nasf_each": 10000}, {"name": "Engineering Commons", "nasf": 3450, "on": true, "cat": "community", "floor": "ground", "qty": 1, "nasf_each": 3450}, {"name": "Cafe", "nasf": 1800, "on": true, "cat": "community", "floor": "ground", "qty": 1, "nasf_each": 1800}, {"name": "School / Department Administration", "nasf": 2400, "on": true, "cat": "office_enclosed", "floor": "ground", "qty": 1, "nasf_each": 2400, "occupancy_each": 12}, {"name": "Loading Dock", "nasf": 2000, "on": true, "cat": "support", "floor": "ground", "qty": 1, "nasf_each": 2000}, {"name": "Building Support (IT, Storage, etc.)", "nasf": 1400, "on": true, "cat": "support", "floor": "basement", "qty": 1, "nasf_each": 1400}, {"name": "Event Storage", "nasf": 500, "on": true, "cat": "support", "floor": "ground", "qty": 1, "nasf_each": 500}];
+        S.upperCommunity = [{"name": "Informal Meeting", "nasf": 925, "on": true, "cat": "collaboration", "floor": "upper", "qty": 1, "nasf_each": 925}, {"name": "Huddle Room", "nasf": 780, "on": true, "cat": "collaboration", "floor": "upper", "qty": 1, "nasf_each": 780}, {"name": "Pantry", "nasf": 350, "on": true, "cat": "collaboration", "floor": "upper", "qty": 1, "nasf_each": 350}, {"name": "Meeting Room (8-10)", "nasf": 840, "on": true, "cat": "collaboration", "floor": "upper", "qty": 1, "nasf_each": 840}, {"name": "Wellness/Lactation", "nasf": 100, "on": true, "cat": "collaboration", "floor": "upper", "qty": 1, "nasf_each": 100}];
+        S.coreItems = [{"name": "SHELL SPACE", "nasf": 3000, "on": true, "qty": 1, "nasf_each": 3000, "floor": "basement"}, {"name": "SHELL SPACE", "nasf": 3000, "on": true, "qty": 1, "nasf_each": 3000, "floor": "basement"}];
+        S.basementAllocation = {"wetbio": 0, "wetchem": 6, "drywkshp": 0, "comp": 0, "optics": 0, "optnano": 0};
+        S.piFloorAllocation = {"2": {"wetbio": 6, "wetchem": 3, "drywkshp": 0, "comp": 0, "optics": 0, "optnano": 0}, "3": {"wetbio": 1, "wetchem": 0, "drywkshp": 4, "comp": 0, "optics": 0, "optnano": 6}, "4": {"wetbio": 0, "wetchem": 0, "drywkshp": 3, "comp": 1, "optics": 7, "optnano": 0}};
       }
-    }
+    },
+    {
+      name: "2c — Bigger Building + 10K Cleanroom",
+      desc: "37 PIs. Bigger building (224K, 39K plates), 10K cleanroom + Colloquium/Clubs/Farley/Career on L2.",
+      tweaks: function() {
+        _setTypeDef('wetbio',70,70,45,135,30);
+        _setTypeDef('wetchem',120,60,45,135,30);
+        _setTypeDef('drywkshp',70,50,45,135,30);
+        _setTypeDef('comp',0,0,60,135,30);
+        _setTypeDef('optics',0,140,45,135,30);
+        _setTypeDef('optnano',180,40,85,135,30);
+        _setTypePis('wetbio',7);
+        _setTypePis('wetchem',9);
+        _setTypePis('drywkshp',7);
+        _setTypePis('comp',1);
+        _setTypePis('optics',7);
+        _setTypePis('optnano',6);
+        S.totalPIs = 37;
+        S.basementGSF=36000; S.aboveGradeGSF=39000; S.groundFloorGSF=41000; S.penthouseGSF=30000; S.aboveGradeFloors=4; S.penthouseEff=0;
+        S.gfProgram = [{"name": "Classrooms (4×40-Seat)", "nasf": 4800, "on": true, "cat": "classroom", "floor": "ground", "qty": 4, "nasf_each": 1200}, {"name": "Cleanroom", "nasf": 10000, "on": true, "cat": "event", "floor": "ground", "qty": 1, "nasf_each": 10000}, {"name": "Engineering Commons", "nasf": 3400, "on": true, "cat": "community", "floor": "ground", "qty": 1, "nasf_each": 3400}, {"name": "Cafe", "nasf": 1850, "on": true, "cat": "community", "floor": "ground", "qty": 1, "nasf_each": 1850}, {"name": "School / Department Administration", "nasf": 2400, "on": true, "cat": "office_enclosed", "floor": "ground", "qty": 1, "nasf_each": 2400, "occupancy_each": 12}, {"name": "Loading Dock", "nasf": 2000, "on": true, "cat": "support", "floor": "ground", "qty": 1, "nasf_each": 2000}, {"name": "Building Support (IT, Storage, etc.)", "nasf": 1400, "on": true, "cat": "support", "floor": "basement", "qty": 1, "nasf_each": 1400}, {"name": "Event Storage", "nasf": 500, "on": true, "cat": "support", "floor": "ground", "qty": 1, "nasf_each": 500}];
+        S.upperCommunity = [{"name": "Informal Meeting", "nasf": 925, "on": true, "cat": "collaboration", "floor": "upper", "qty": 1, "nasf_each": 925}, {"name": "Huddle Room", "nasf": 780, "on": true, "cat": "collaboration", "floor": "upper", "qty": 1, "nasf_each": 780}, {"name": "Pantry", "nasf": 350, "on": true, "cat": "collaboration", "floor": "upper", "qty": 1, "nasf_each": 350}, {"name": "Meeting Room (8-10)", "nasf": 840, "on": true, "cat": "collaboration", "floor": "upper", "qty": 1, "nasf_each": 840}, {"name": "Wellness/Lactation", "nasf": 100, "on": true, "cat": "collaboration", "floor": "upper", "qty": 1, "nasf_each": 100}, {"name": "Colloquium / Flex, 100p at Round Tables", "nasf": 4000, "on": true, "cat": "event", "floor": "2", "qty": 1, "nasf_each": 4000}, {"name": "Clubs", "nasf": 2000, "on": true, "cat": "event", "floor": "2", "qty": 1, "nasf_each": 2000}, {"name": "Farley Center", "nasf": 1800, "on": true, "cat": "office_enclosed", "floor": "2", "qty": 1, "nasf_each": 1800}, {"name": "Career Services", "nasf": 1000, "on": true, "cat": "office_enclosed", "floor": "2", "qty": 1, "nasf_each": 1000}];
+        S.coreItems = [{"name": "SHELL SPACE", "nasf": 3000, "on": true, "qty": 1, "nasf_each": 3000, "floor": "basement"}, {"name": "SHELL SPACE", "nasf": 3000, "on": true, "qty": 1, "nasf_each": 3000, "floor": "basement"}];
+        S.basementAllocation = {"wetbio": 0, "wetchem": 6, "drywkshp": 0, "comp": 0, "optics": 0, "optnano": 0};
+        S.piFloorAllocation = {"2": {"wetbio": 6, "wetchem": 3, "drywkshp": 0, "comp": 0, "optics": 0, "optnano": 0}, "3": {"wetbio": 1, "wetchem": 0, "drywkshp": 4, "comp": 0, "optics": 0, "optnano": 6}, "4": {"wetbio": 0, "wetchem": 0, "drywkshp": 3, "comp": 1, "optics": 7, "optnano": 0}};
+      }
+    },
+    {
+      name: "3a — Less Research + Dean's Suite on L4",
+      desc: "35 PIs (bsmt 6 / 9 / 11 / 9). Dean's Suite on L4, fewer Wet Bio PIs. 205K GSF.",
+      tweaks: function() {
+        _setTypeDef('wetbio',70,70,45,135,30);
+        _setTypeDef('wetchem',120,60,45,135,30);
+        _setTypeDef('drywkshp',70,50,45,135,30);
+        _setTypeDef('comp',0,0,60,135,30);
+        _setTypeDef('optics',0,140,45,135,30);
+        _setTypeDef('optnano',180,40,85,135,30);
+        _setTypePis('wetbio',5);
+        _setTypePis('wetchem',9);
+        _setTypePis('drywkshp',7);
+        _setTypePis('comp',1);
+        _setTypePis('optics',7);
+        _setTypePis('optnano',6);
+        S.totalPIs = 35;
+        S.basementGSF=36000; S.aboveGradeGSF=34000; S.groundFloorGSF=41000; S.penthouseGSF=26000; S.aboveGradeFloors=4; S.penthouseEff=0;
+        S.gfProgram = [{"name": "Classrooms (4×40-Seat)", "nasf": 4800, "on": true, "cat": "classroom", "floor": "ground", "qty": 4, "nasf_each": 1200}, {"name": "Cleanroom", "nasf": 10000, "on": true, "cat": "event", "floor": "ground", "qty": 1, "nasf_each": 10000}, {"name": "Engineering Commons", "nasf": 3450, "on": true, "cat": "community", "floor": "ground", "qty": 1, "nasf_each": 3450}, {"name": "Cafe", "nasf": 1800, "on": true, "cat": "community", "floor": "ground", "qty": 1, "nasf_each": 1800}, {"name": "School / Department Administration", "nasf": 2400, "on": true, "cat": "office_enclosed", "floor": "ground", "qty": 1, "nasf_each": 2400, "occupancy_each": 12}, {"name": "Loading Dock", "nasf": 2000, "on": true, "cat": "support", "floor": "ground", "qty": 1, "nasf_each": 2000}, {"name": "Building Support (IT, Storage, etc.)", "nasf": 1400, "on": true, "cat": "support", "floor": "basement", "qty": 1, "nasf_each": 1400}, {"name": "Event Storage", "nasf": 500, "on": true, "cat": "support", "floor": "ground", "qty": 1, "nasf_each": 500}, {"name": "Dean's Suite", "nasf": 4000, "on": true, "cat": "office_enclosed", "floor": "4", "qty": 1, "nasf_each": 4000, "occupancy_each": 12}];
+        S.upperCommunity = [{"name": "Informal Meeting", "nasf": 925, "on": true, "cat": "collaboration", "floor": "upper", "qty": 1, "nasf_each": 925}, {"name": "Huddle Room", "nasf": 780, "on": true, "cat": "collaboration", "floor": "upper", "qty": 1, "nasf_each": 780}, {"name": "Pantry", "nasf": 350, "on": true, "cat": "collaboration", "floor": "upper", "qty": 1, "nasf_each": 350}, {"name": "Meeting Room (8-10)", "nasf": 840, "on": true, "cat": "collaboration", "floor": "upper", "qty": 1, "nasf_each": 840}, {"name": "Wellness/Lactation", "nasf": 100, "on": true, "cat": "collaboration", "floor": "upper", "qty": 1, "nasf_each": 100}];
+        S.coreItems = [{"name": "SHELL SPACE", "nasf": 3000, "on": true, "qty": 1, "nasf_each": 3000, "floor": "basement"}, {"name": "SHELL SPACE", "nasf": 3000, "on": true, "qty": 1, "nasf_each": 3000, "floor": "basement"}];
+        S.basementAllocation = {"wetbio": 0, "wetchem": 6, "drywkshp": 0, "comp": 0, "optics": 0, "optnano": 0};
+        S.piFloorAllocation = {"2": {"wetbio": 5, "wetchem": 3, "drywkshp": 0, "comp": 0, "optics": 0, "optnano": 1}, "3": {"wetbio": 0, "wetchem": 0, "drywkshp": 6, "comp": 0, "optics": 0, "optnano": 5}, "4": {"wetbio": 0, "wetchem": 0, "drywkshp": 1, "comp": 1, "optics": 7, "optnano": 0}};
+      }
+    },
+    {
+      name: "3b — Same Research + Dean's Suite on PH",
+      desc: "37 PIs. Same research as 2b plus a Dean's Suite on the penthouse level. 205K GSF.",
+      tweaks: function() {
+        _setTypeDef('wetbio',70,70,45,135,30);
+        _setTypeDef('wetchem',120,60,45,135,30);
+        _setTypeDef('drywkshp',70,50,45,135,30);
+        _setTypeDef('comp',0,0,60,135,30);
+        _setTypeDef('optics',0,140,45,135,30);
+        _setTypeDef('optnano',180,40,85,135,30);
+        _setTypePis('wetbio',7);
+        _setTypePis('wetchem',9);
+        _setTypePis('drywkshp',7);
+        _setTypePis('comp',1);
+        _setTypePis('optics',7);
+        _setTypePis('optnano',6);
+        S.totalPIs = 37;
+        S.basementGSF=36000; S.aboveGradeGSF=34000; S.groundFloorGSF=41000; S.penthouseGSF=26000; S.aboveGradeFloors=4; S.penthouseEff=0.16;
+        S.gfProgram = [{"name": "Classrooms (4×40-Seat)", "nasf": 4800, "on": true, "cat": "classroom", "floor": "ground", "qty": 4, "nasf_each": 1200}, {"name": "Cleanroom", "nasf": 10000, "on": true, "cat": "event", "floor": "ground", "qty": 1, "nasf_each": 10000}, {"name": "Engineering Commons", "nasf": 3450, "on": true, "cat": "community", "floor": "ground", "qty": 1, "nasf_each": 3450}, {"name": "Cafe", "nasf": 1800, "on": true, "cat": "community", "floor": "ground", "qty": 1, "nasf_each": 1800}, {"name": "School / Department Administration", "nasf": 2400, "on": true, "cat": "office_enclosed", "floor": "ground", "qty": 1, "nasf_each": 2400, "occupancy_each": 12}, {"name": "Loading Dock", "nasf": 2000, "on": true, "cat": "support", "floor": "ground", "qty": 1, "nasf_each": 2000}, {"name": "Building Support (IT, Storage, etc.)", "nasf": 1400, "on": true, "cat": "support", "floor": "basement", "qty": 1, "nasf_each": 1400}, {"name": "Event Storage", "nasf": 500, "on": true, "cat": "support", "floor": "ground", "qty": 1, "nasf_each": 500}, {"name": "Dean's Suite", "nasf": 4000, "on": true, "cat": "office_enclosed", "floor": "penthouse", "qty": 1, "nasf_each": 4000, "occupancy_each": 12}];
+        S.upperCommunity = [{"name": "Informal Meeting", "nasf": 925, "on": true, "cat": "collaboration", "floor": "upper", "qty": 1, "nasf_each": 925}, {"name": "Huddle Room", "nasf": 780, "on": true, "cat": "collaboration", "floor": "upper", "qty": 1, "nasf_each": 780}, {"name": "Pantry", "nasf": 350, "on": true, "cat": "collaboration", "floor": "upper", "qty": 1, "nasf_each": 350}, {"name": "Meeting Room (8-10)", "nasf": 840, "on": true, "cat": "collaboration", "floor": "upper", "qty": 1, "nasf_each": 840}, {"name": "Wellness/Lactation", "nasf": 100, "on": true, "cat": "collaboration", "floor": "upper", "qty": 1, "nasf_each": 100}];
+        S.coreItems = [{"name": "SHELL SPACE", "nasf": 3000, "on": true, "qty": 1, "nasf_each": 3000, "floor": "basement"}, {"name": "SHELL SPACE", "nasf": 3000, "on": true, "qty": 1, "nasf_each": 3000, "floor": "basement"}];
+        S.basementAllocation = {"wetbio": 0, "wetchem": 6, "drywkshp": 0, "comp": 0, "optics": 0, "optnano": 0};
+        S.piFloorAllocation = {"2": {"wetbio": 6, "wetchem": 3, "drywkshp": 0, "comp": 0, "optics": 0, "optnano": 0}, "3": {"wetbio": 1, "wetchem": 0, "drywkshp": 4, "comp": 0, "optics": 0, "optnano": 6}, "4": {"wetbio": 0, "wetchem": 0, "drywkshp": 3, "comp": 1, "optics": 7, "optnano": 0}};
+      }
+    },
   ];
 
   // Save original state
@@ -4457,11 +4771,35 @@ function renderLabMixSFTable() {
 // EXPORT
 // ============================================================
 function exportJSON() {
-  var blob = new Blob([JSON.stringify(S, null, 2)], {type:'application/json'});
+  // v0.7.6: Edge-safe download. The previous version created a detached <a>
+  // and called .click() — Edge (and some enterprise configs) block that. We
+  // now (a) strip the redundant nested scenario snapshots so the file isn't
+  // bloated, (b) use msSaveOrOpenBlob on legacy Edge, and (c) append the
+  // anchor to the DOM before clicking, then revoke the object URL.
+  var exportState = {};
+  Object.keys(S).forEach(function(k){ if (k !== 'scenarios') exportState[k] = S[k]; });
+  // Keep scenarios but drop the scenarios array nested inside each snapshot's
+  // state (that nesting grows the file enormously and isn't needed on re-import).
+  exportState.scenarios = (S.scenarios || []).map(function(sc){
+    var st = {};
+    if (sc.state) Object.keys(sc.state).forEach(function(k){ if (k !== 'scenarios') st[k] = sc.state[k]; });
+    return { name: sc.name, desc: sc.desc, state: st, data: sc.data };
+  });
+  var json = JSON.stringify(exportState, null, 2);
+  var filename = 'NEB_Dashboard_' + new Date().toISOString().slice(0,10) + '.json';
+  var blob = new Blob([json], { type: 'application/json' });
+  if (window.navigator && window.navigator.msSaveOrOpenBlob) {   // legacy Edge / IE
+    window.navigator.msSaveOrOpenBlob(blob, filename);
+    return;
+  }
+  var url = URL.createObjectURL(blob);
   var a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = 'NEB_Dashboard_' + new Date().toISOString().slice(0,10) + '.json';
+  a.href = url;
+  a.download = filename;
+  a.style.display = 'none';
+  document.body.appendChild(a);
   a.click();
+  setTimeout(function(){ document.body.removeChild(a); URL.revokeObjectURL(url); }, 150);
 }
 
 function importJSON(event) {
@@ -4942,7 +5280,7 @@ function _buildCostSheet(wb, ctx) {
   _xset(ws, 5, 12, { v:'Remarks', s:_xstyle({ size:9, halign:'center', valign:'center' }) });
 
   // Column headings — ALL centered, smaller font
-  var hdrs6 = [['C','Description'],['D','NASF'],['E','DGSF\nFactor'],['F','GFA'],['G','GSF'],
+  var hdrs6 = [['C','Description'],['D','NASF'],['E','DGSF\nFactor'],['F','GSF'],['G','GSF'],
                ['H','$/SF'],['I','Qty'],['J','%'],['K','Subtotal']];
   hdrs6.forEach(function(h){
     var col = h[0].charCodeAt(0)-64;
@@ -5020,12 +5358,12 @@ function _buildCostSheet(wb, ctx) {
   var GSF_CELL  = 'G'+inputsFirst;
   var NASF_CELL = 'D'+(inputsFirst+1);
   var DGSF_CELL = 'G'+(inputsFirst+2);
-  // DGSF factor for line GFA: DGSF / NASF, evaluated inline
+  // DGSF factor for line GSF: DGSF / NASF, evaluated inline
   var DGSF_FACTOR_EXPR = '($'+DGSF_CELL+'/$'+NASF_CELL+')';
   rowH(r, 5.25); r += 1;
 
   // 2. Program Fitout band — Research (PIs + Shared) vs Non-Research
-  band(r, PROG_C, 'Program Fitout — NASF → GFA → Cost', true);
+  band(r, PROG_C, 'Program Fitout — NASF → GSF → Cost', true);
   var bandProgRow = r; r += 1; rowH(r, 5.0); r += 1;
 
   // Research sub-group: PI typologies + Shared Facilities merged
@@ -5343,7 +5681,7 @@ function _legacyExportXLSXStub() {
     ['Net-to-Gross (DGSF inflation over NASF)', (_netToGrossPct*100).toFixed(1) + '%'],
     [],
     ['PROGRAM FIT-OUT (DGSF Basis)'],
-    ['Program Category', 'NASF', '% Total', 'Pro Rata Circ', 'DGSF', '$/DGSF', 'Cost', 'Bldg Sup', 'GFA'],
+    ['Program Category', 'NASF', '% Total', 'Pro Rata Circ', 'DGSF', '$/DGSF', 'Cost', 'Bldg Sup', 'GSF'],
     [],
     ['RESEARCH'],
   ];
@@ -6383,7 +6721,15 @@ if (typeof buildPresetScenarios === 'function') {
     // of scenarios and does NOT want the 6 canonical presets re-injected on
     // every page load. If S already has at least one scenario, short-circuit
     // the entire rebuild — keep what's there, leave activeScenario alone.
-    if (S.scenarios && S.scenarios.length > 0) {
+    // v0.7.5: one-time replacement with the June 2026 Excel scenario set
+    // (0, 1, 2a, 2b, 2c, 3a). If the saved state predates this revision, drop
+    // whatever scenarios were baked in and rebuild from the presets below;
+    // once rebuilt (flag set), preserve whatever is there.
+    if (S._scenRev !== '2026-06-deck') {
+      S.scenarios = [];
+      S.activeScenario = -1;
+      S._scenRev = '2026-06-deck';
+    } else if (S.scenarios && S.scenarios.length > 0) {
       return;
     }
     // 1. Capture user scenarios (anything whose name isn't one of the 6
@@ -6469,13 +6815,108 @@ if (typeof buildPresetScenarios === 'function') {
     if (S.energyEUI.classroom == null) S.energyEUI.classroom = S.energyEUI.event || 50;
     if (S.energyEUI.teaching_lab == null) S.energyEUI.teaching_lab = 80;
   }
+  // v0.7.2: penthouse efficiency defaults to 0 (mechanical only) until the user
+  // raises it to place program on the top floor.
+  if (S.penthouseEff == null) S.penthouseEff = 0;
+})();
+
+// ============================================================
+// COST DATA — NWU benchmarks (Construction Cost Q4 2025 $/SF) +
+// Northwestern Project Budget Breakdown. Source files: "Cost Data" folder,
+// June 2026. The benchmark library is used by the Cost Detail mapping
+// dropdowns to assign a $/SF fit-out rate per program category.
+// ============================================================
+window.BENCH_RATES = [
+  { key:'core_shell',    label:'Core & Shell',           rate:950  },   // incl. $290/SF envelope (was $212)
+  { key:'wet_bioe',      label:'Wet Lab — BioE',         rate:646  },
+  { key:'wet_chem',      label:'Wet Chem / Materials',   rate:830  },
+  { key:'dry_large',     label:'Dry Lab / Large Lab',    rate:538  },
+  { key:'computational', label:'Computational',          rate:538  },
+  { key:'flex',          label:'Flex Lab',               rate:468  },
+  { key:'office',        label:'Office',                 rate:757  },
+  { key:'writeup',       label:'Write-up',               rate:860  },
+  { key:'community',     label:'Community',              rate:605  },
+  { key:'event',         label:'Event',                  rate:860  },
+  { key:'optics_nano',   label:'Optics — Nano (Higher Intensity)', rate:1680 },
+  { key:'optics_int',    label:'Optics — Lower Intensity',         rate:646  },
+  { key:'adv_imaging',   label:'Advanced Imaging',       rate:646  },
+  { key:'cleanroom',     label:'Cleanroom Nano-Fab',     rate:425  },
+  { key:'battery',       label:'Battery / Energy',       rate:425  },
+  { key:'support',       label:'Support',                rate:342  },
+  { key:'site',          label:'Site / Demo',            rate:90   }
+];
+
+// One-time application of the latest cost data. Guarded by a revision flag so
+// it brings the new numbers in once, after which the user can tune any slider.
+(function _seedCostDataJun2026(){
+  if (!S.cost) return;
+  var c = S.cost;
+  if (c._costDataRev !== '2026-06-v3') {
+    // Non-research program fit-out rates — Q4 2025 $/SF (NWU benchmarks).
+    c.communityRate       = 605;   // Community
+    c.collaborationRate   = 605;   // → Community
+    c.eventRate           = 860;   // Event
+    c.classroomRate       = 757;   // → Office
+    c.teachingLabRate     = 646;   // → Wet Lab (BioE)
+    c.learningSupportRate = 342;   // → Support
+    c.officeEnclosedRate  = 757;   // Office
+    c.officeOpenRate      = 757;   // Office
+    c.officeSupportRate   = 342;   // → Support
+    c.supportRate         = 342;   // Support
+    // Core & Shell + Site (applied to total GSF). Core & Shell raised to $950
+    // for the corrected $290/SF envelope (was $212 → $872).
+    c.coreShellRate       = 950;   // Core & Shell (incl. $290 envelope)
+    c.siteRate            = 90;    // Site / Demo
+    // Research PI typologies → mapped to NWU benchmark Q4 2025 $/SF by id.
+    var _typeRateMap = {
+      wetbio:   646,   // Wet Labs (BioE)
+      wetchem:  830,   // Wet Chem / Materials
+      drywkshp: 538,   // Dry Lab / Large Lab
+      comp:     538,   // Computational
+      optics:   646,   // Optics — Int (lower intensity)
+      optnano: 1680    // Optics — Lower / Nano (higher intensity)
+    };
+    c.typeRates = c.typeRates || {};
+    (S.types || []).forEach(function(t){ c.typeRates[t.id] = (_typeRateMap[t.id] != null) ? _typeRateMap[t.id] : 646; });
+    // Shared facilities → mapped by name where clear; default 646.
+    var _coreRateMap = {
+      'Flex Lab':                  468,
+      'Battery / Energy Testing':  425,
+      'Simulation / Visualization':538,
+      'Structural / Materials Testing':538,
+      'Robotics / Flight Test':    538
+    };
+    c.coreRates = c.coreRates || {};
+    (S.coreItems || []).forEach(function(ci){ c.coreRates[ci.name] = (_coreRateMap[ci.name] != null) ? _coreRateMap[ci.name] : 646; });
+    c.escalationRate = 0.04;       // 4%/yr (budget breakdown)
+    c.tariffPct      = 0;          // tariff not carried in the budget breakdown
+    // Project-cost buildup — % of TOTAL PROJECT, per the budget table.
+    c.designContingencyPct       = 0.06;   // Design Contingency
+    c.constructionContingencyPct = 0.06;   // Construction Contingency
+    c.escalationPct              = 0.09;   // Escalation (4%/yr, 36mo.)
+    c.professionalServicesPct    = 0.10;   // Professional Services
+    c.ownerWorkPct               = 0.03;   // Owner Work
+    c.projectContingencyPct      = 0.05;   // Project Contingency
+    c.permitsPct                 = 0.02;   // Permits
+    c.pmFeePct                   = 0.01;   // Project Management Fee
+    c._costDataRev   = '2026-06-v3';
+  }
+  // Defaults for brand-new states (% of total project).
+  if (c.designContingencyPct       == null) c.designContingencyPct       = 0.06;
+  if (c.constructionContingencyPct == null) c.constructionContingencyPct = 0.06;
+  if (c.escalationPct              == null) c.escalationPct              = 0.09;
+  if (c.professionalServicesPct    == null) c.professionalServicesPct    = 0.10;
+  if (c.ownerWorkPct               == null) c.ownerWorkPct               = 0.03;
+  if (c.projectContingencyPct      == null) c.projectContingencyPct      = 0.05;
+  if (c.permitsPct                 == null) c.permitsPct                 = 0.02;
+  if (c.pmFeePct                   == null) c.pmFeePct                   = 0.01;
 })();
 
 // ============================================================
 // TABS — v0.5 13-tab order
 // ============================================================
-TABS = ['Fundamentals','PI Typologies','PI Mix','Academic Space','Program Support',
-        'Basement & Shared','Floor Stacking','Energy','Cost','Technical Criteria',
+TABS = ['Fundamentals','PI Typologies','PI Space Mix','Academic Space','Floor Stacking',
+        'Energy','Cost','Technical Criteria',
         'Scenarios','N\'hood','Viz'];
 
 // Initialize state branches for new tabs.
@@ -7236,7 +7677,7 @@ if (typeof renderMEP === 'function') {
         '</div>'+
         '<table><thead><tr><th>Program Bucket</th><th style="text-align:right">NSF</th><th>Covered by Card</th><th>Source</th></tr></thead>'+
         '<tbody>'+rows+'</tbody></table>'+
-        '<div class="cov-note">Yellow rows = no Tech Crit card carries that NSF. Add the missing category via <b>+ Program</b> on a card. NSF on lab + system-sourced cards is auto-summed from the program (locked) — change the source on the PI Typologies, Basement &amp; Shared, Academic Space, or Program Support tabs and the card updates here.</div>'+
+        '<div class="cov-note">Yellow rows = no Tech Crit card carries that NSF. Add the missing category via <b>+ Program</b> on a card. NSF on lab + system-sourced cards is auto-summed from the program (locked) — change the source on the PI Typologies, PI Space Mix, or Academic Space tabs and the card updates here.</div>'+
       '</div>';
   }
 
@@ -7690,16 +8131,15 @@ if (typeof floorVis === 'function') {
 render = function() {
   var d = C();
   renderTabs();
+  renderScenarioBar();
   renderMetrics(d);
   var el = document.getElementById('content');
   var label = TABS[activeTab] || 'Fundamentals';
   var dispatch = {
     'Fundamentals':       function() { el.innerHTML = renderFundamentalsV5(d); },
     'PI Typologies':      function() { el.innerHTML = renderTypologies(d); },
-    'PI Mix':             function() { el.innerHTML = renderMix(d); },
-    'Academic Space':     function() { el.innerHTML = renderAcademicSpaceV5(d); },
-    'Program Support':    function() { el.innerHTML = renderProgramSupportV5(d); },
-    'Basement & Shared':    function() { el.innerHTML = renderBasement(d); },
+    'PI Space Mix':       function() { el.innerHTML = renderMix(d); },
+    'Academic Space':     function() { el.innerHTML = renderAcademicSpaceV5(d); _apsApplyCols(); _skillInitDnD(); },
     'Floor Stacking':     function() { el.innerHTML = renderFloorStackingV5(d); _skillMoveVisual2(); _skillMountStackVisuals(d); _skillMountProgramFill(d); _skillStripDGSF(); },
     'Energy':             function() { el.innerHTML = renderEnergy(d); },
     'Cost':               function() { el.innerHTML = renderCostV5(d); },
@@ -7816,11 +8256,12 @@ function renderFundamentalsV5(d) {
 // ============================================================
 function renderAcademicSpaceV5(d) {
   var META = window.CATEGORY_META || {};
+  // v0.6: Community + Collaboration merged into one section (single table,
+  // category dropdown per row, summary tiles above — sliders removed).
   var sections = [
-    { title: 'Community Spaces',                          cats: ['community'],                                     tip: 'Building-wide gathering — typically ground-floor (Café, Commons, atria). Pairs with Collaboration toward the 12–14% NASF target. Use Qty × NASF/each (e.g. 2 cafés × 1,500 SF).', addLabel: 'Community',     perUnit: true },
-    { title: 'Collaboration Spaces',                      cats: ['collaboration'],                                 tip: 'Floor-level team collab — meeting rooms, touchdown, pantry, nooks. Plan ~20–25 SF/FTE (PI + Admin). Use Qty to repeat units (e.g. 4 meeting rooms of 200 SF).', addLabel: 'Collaboration', perUnit: true },
-    { title: 'Learning / Classrooms / Teaching Labs',     cats: ['event','classroom','teaching_lab','learning_support'], tip: 'Colloquium, classrooms, teaching labs, and adjacent learning support (lab prep, AV/control). Use Qty × NASF/each (e.g. 4 classrooms × 1,000 SF). Per-seat targets: Classroom 20–25 · Teaching Lab 40–80 · Event 12–18 SF/seat.', addLabel: 'Learning', perUnit: true, perSeat: true },
-    { title: 'Offices',                                   cats: ['office_enclosed','office_open','office_support'],     tip: 'General/shared offices (separate from PI faculty offices). Per-unit: Qty × NASF/each = total NASF; Qty × Occupancy/each = total people. Office Support (workroom/storage) sized to NASF only.', addLabel: 'Office', perUnit: true, hasOcc: true }
+    { title: 'Community + Collaboration',                 cats: ['community','collaboration'],                          addLabel: 'Community', perUnit: true, isCommCollab: true },
+    { title: 'Learning + Events',                         cats: ['event','classroom','teaching_lab','learning_support'], addLabel: 'Learning', perUnit: true, perSeat: true },
+    { title: 'Offices',                                   cats: ['office_enclosed','office_open','office_support'],     addLabel: 'Office', perUnit: true, hasOcc: true }
   ];
 
   // v0.5.7: per-seat planning targets and defaults for Learning categories
@@ -7982,7 +8423,7 @@ function renderAcademicSpaceV5(d) {
     return 'ground';
   }
 
-  var h = '<div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;align-items:start">';
+  var h = '<div style="display:grid;grid-template-columns:1fr;gap:14px;align-items:start">';
 
   ['ground','upper'].forEach(function(scope) {
     var cardTitle = (scope === 'upper') ? 'Upper Floor Program' : 'Ground Floor Program';
@@ -7990,87 +8431,41 @@ function renderAcademicSpaceV5(d) {
     h += '<div class="card"><div class="card-title">'+cardTitle+'</div>';
 
     sections.forEach(function(sec) {
-    // v0.5.34: each of Community + Collab now has its OWN target validation
-    // in the section heading (red under / green at-or-over).
-    var isCommunitySec    = (sec.cats[0] === 'community');
-    var isCollabSec       = (sec.cats[0] === 'collaboration');
-    if (isCommunitySec) {
-      var headColor = communityOK ? 'var(--green)' : 'var(--coral)';
-      var deltaTxt  = (commDeltaSF >= 0 ? '+' : '') + commDeltaSF.toLocaleString();
-      h += '<h3 style="font-size:1.05rem;font-weight:700;color:var(--navy);margin:14px 0 6px;display:flex;align-items:baseline;gap:10px;flex-wrap:wrap">';
-      h += '<span>'+sec.title+'</span>';
-      h += '<span style="font-family:\'IBM Plex Mono\',monospace;font-size:.92rem;font-weight:700;color:'+headColor+'">'
-         + communityNASF.toLocaleString() + ' / ' + commTargetSF.toLocaleString() + ' NASF target'
-         + ' <span style="font-weight:500;opacity:.85">(' + deltaTxt + ')</span></span>';
-      h += '</h3>';
-    } else if (isCollabSec) {
-      var headColor = collabOK ? 'var(--green)' : 'var(--coral)';
-      var deltaTxt  = (collabDeltaSF >= 0 ? '+' : '') + collabDeltaSF.toLocaleString();
-      h += '<h3 style="font-size:1.05rem;font-weight:700;color:var(--navy);margin:14px 0 6px;display:flex;align-items:baseline;gap:10px;flex-wrap:wrap">';
-      h += '<span>'+sec.title+'</span>';
-      h += '<span style="font-family:\'IBM Plex Mono\',monospace;font-size:.92rem;font-weight:700;color:'+headColor+'">'
-         + collabNASF.toLocaleString() + ' / ' + collabTargetSF.toLocaleString() + ' NASF target'
-         + ' <span style="font-weight:500;opacity:.85">(' + deltaTxt + ')</span></span>';
-      h += '</h3>';
-    } else {
-      h += '<h3 style="font-size:1.05rem;font-weight:700;color:var(--navy);margin:14px 0 6px">'+sec.title+'</h3>';
-    }
-    // v0.5.40: per-section grey tip removed per Tom — generally not useful.
+    // v0.6: plain section heading — the target-% badges were removed along
+    // with the Community / Collaboration sliders.
+    h += '<h3 style="font-size:1.05rem;font-weight:700;color:var(--navy);margin:14px 0 6px">'+sec.title+'</h3>';
 
-    // Planning panels:
-    //   - Collaboration section: SF/Person + combined-% panel
-    //   - Community section: target % slider + Target/Actual/Delta tiles
-    //     (mirrors the Program Support tab's pattern)
-    // v0.5.33: render the building-wide tiles only on the GROUND card so the
-    // same panel doesn't appear twice (the totals span both cards).
-    if ((sec.cats[0] === 'collaboration' || sec.cats[0] === 'community') && scope === 'ground') {
-      // v0.5.6: panel background uses the section's FICM color family
-      // (Community = lighter yellow, Collaboration = slightly darker)
-      var panelStyle = sec.cats[0] === 'community'
-        ? 'background:#FFFBEB;border:1.5px solid #FFE885'   // FICM 3c bg + 3d border
-        : 'background:#FFF4C7;border:1.5px solid #FFDF5A';  // FICM 3e bg + 3b border
-
-      // v0.5.34: each section now has its OWN target slider (was a single
-      // combined Community + Collab slider on the Community section).
-      var sliderState = isCommunitySec ? 'communityPct' : 'collabPct';
-      var sliderLabel = isCommunitySec ? 'Community target (% of NASF)'
-                                       : 'Collab target (% of NASF)';
-      var sliderVal   = isCommunitySec ? S.communityPct : S.collabPct;
-      var sliderMax   = isCommunitySec ? '0.20' : '0.15';
-      h += '<div class="sl-row" style="margin:10px 0 6px;display:flex;align-items:center;gap:10px;padding:10px 12px;'+panelStyle+';border-radius:8px">';
-      h += '<label class="sl" style="min-width:230px;font-weight:700;color:var(--navy)">'+sliderLabel+'</label>';
-      h += '<input type="range" min="0.02" max="'+sliderMax+'" step="0.005" value="'+sliderVal+'" oninput="S.'+sliderState+'=parseFloat(this.value);render()" style="flex:1">';
-      h += '<span class="sl-val" style="font-family:\'IBM Plex Mono\',monospace;font-weight:800;color:var(--navy);min-width:60px;text-align:right">'+(Math.round(sliderVal*1000)/10)+'%</span>';
-      h += '</div>';
-
-      h += '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin:6px 0 14px;padding:10px;'+panelStyle+';border-radius:8px">';
-      function tile(label, val, target, ok) {
-        var color = ok === true ? 'var(--green)' : ok === false ? 'var(--coral)' : 'var(--navy)';
-        return '<div style="text-align:center">'
-          + '<div style="font-size:.7rem;color:var(--mut);text-transform:uppercase;letter-spacing:.06em;font-weight:600">'+label+'</div>'
-          + '<div style="font-family:\'IBM Plex Mono\',monospace;font-size:1.4rem;font-weight:800;color:'+color+';margin-top:2px">'+val+'</div>'
-          + (target ? '<div style="font-size:.7rem;color:var(--mut);margin-top:1px">'+target+'</div>' : '')
+    // v0.6: Community + Collaboration summary tiles (sliders removed). Render
+    // once on the GROUND card since totals are building-wide. Mirrors the
+    // Learning / Office mini-card panels: Qty · NASF · SF/FTE per category.
+    if (sec.isCommCollab && scope === 'ground') {
+      var pop_cc = totalPeople || 1;
+      var ccBuckets = { community:{qty:0,nasf:0}, collaboration:{qty:0,nasf:0} };
+      _allAcademicItems().forEach(function(it){
+        if (!it.on) return;
+        if (!ccBuckets[it.cat]) return;
+        var mult = _itemMultiplier(it);
+        ccBuckets[it.cat].qty  += +(it.qty || 0) * mult;
+        ccBuckets[it.cat].nasf += +(it.nasf || 0) * mult;
+      });
+      h += '<div style="display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin:10px 0 14px;padding:10px;background:#FFFBEB;border:1.5px solid #FFE885;border-radius:8px">';
+      function ccTile(catKey, title) {
+        var buc = ccBuckets[catKey];
+        var sfFTE = pop_cc > 0 ? (buc.nasf / pop_cc) : 0;
+        var pctNasf = totNasf > 0 ? (buc.nasf / totNasf * 100) : 0;
+        return '<div style="text-align:center;background:#fff;border:1px solid var(--bdr);border-radius:6px;padding:8px">'
+          + '<div style="font-size:.75rem;color:var(--navy);font-weight:700;letter-spacing:.04em">'+title+'</div>'
+          + '<div style="display:flex;justify-content:space-around;margin-top:6px;gap:6px">'
+          +   '<div><div style="font-size:.65rem;color:var(--mut);text-transform:uppercase">Qty</div><div style="font-family:\'IBM Plex Mono\',monospace;font-size:1.1rem;font-weight:800;color:var(--navy)">'+buc.qty.toLocaleString()+'</div></div>'
+          +   '<div><div style="font-size:.65rem;color:var(--mut);text-transform:uppercase">NASF</div><div style="font-family:\'IBM Plex Mono\',monospace;font-size:1.1rem;font-weight:800;color:var(--navy)">'+buc.nasf.toLocaleString()+'</div></div>'
+          +   '<div><div style="font-size:.65rem;color:var(--mut);text-transform:uppercase">% of NASF</div><div style="font-family:\'IBM Plex Mono\',monospace;font-size:1.1rem;font-weight:800;color:var(--navy)">'+pctNasf.toFixed(1)+'%</div></div>'
+          +   '<div><div style="font-size:.65rem;color:var(--mut);text-transform:uppercase">SF/FTE</div><div style="font-family:\'IBM Plex Mono\',monospace;font-size:1.1rem;font-weight:800;color:var(--navy)">'+sfFTE.toFixed(1)+'</div></div>'
+          + '</div>'
+          + '<div style="font-size:.65rem;color:var(--mut);margin-top:4px">% of '+totNasf.toLocaleString()+' total NASF · ÷ '+pop_cc.toLocaleString()+' population</div>'
           + '</div>';
       }
-      if (isCollabSec) {
-        // Collab-only metrics — no community in the math.
-        h += tile('Population (Research + Office)', totalPeople.toLocaleString(),
-                  researchFTE.toLocaleString()+' research FTE + '+piCount+' PIs + '+officeFTE.toLocaleString()+' office FTE', null);
-        h += tile('Collab NASF', collabNASF.toLocaleString(), 'collab only', null);
-        h += tile('SF / Person', sfPerPerson.toFixed(1), 'collab NASF ÷ population', sfppOK);
-        h += tile('Collab % of NASF', collabPctActual.toFixed(1)+'% / '+(Math.round(S.collabPct*1000)/10)+'%',
-                  collabNASF.toLocaleString()+' / '+collabTargetSF.toLocaleString()+' NASF', collabOK);
-      } else {
-        // Community-only metrics
-        var deltaSign  = commDeltaSF >= 0 ? '+' : '';
-        h += tile('Target NASF', commTargetSF.toLocaleString(),
-                  (Math.round(S.communityPct*1000)/10)+'% of '+totNasf.toLocaleString()+' NASF', null);
-        h += tile('Actual Community NASF', communityNASF.toLocaleString(), 'community only', null);
-        h += tile('Delta', deltaSign+commDeltaSF.toLocaleString(),
-                  communityOK ? 'at / over target' : 'under target', communityOK);
-        h += tile('Community % of NASF', communityPct.toFixed(1)+'%',
-                  'target '+(Math.round(S.communityPct*1000)/10)+'%', communityOK);
-      }
+      h += ccTile('community',     'Community');
+      h += ccTile('collaboration', 'Collaboration');
       h += '</div>';
     }
 
@@ -8078,13 +8473,14 @@ function renderAcademicSpaceV5(d) {
     // v0.5.33: render once (on ground card) since totals are building-wide.
     if (sec.perSeat && scope === 'ground') {
       var seatBuckets = {
-        classroom:{seats:0,nasf:0}, teaching_lab:{seats:0,nasf:0},
-        event:{seats:0,nasf:0}, learning_support:{seats:0,nasf:0}
+        classroom:{qty:0,seats:0,nasf:0}, teaching_lab:{qty:0,seats:0,nasf:0},
+        event:{qty:0,seats:0,nasf:0}, learning_support:{qty:0,seats:0,nasf:0}
       };
       _allAcademicItems().forEach(function(it) {
         if (!it.on) return;
         if (!seatBuckets[it.cat]) return;
         var mult = _itemMultiplier(it);
+        seatBuckets[it.cat].qty   += +(it.qty   || 0) * mult;
         seatBuckets[it.cat].seats += +(it.seats || 0) * mult;
         seatBuckets[it.cat].nasf  += +(it.nasf  || 0) * mult;
       });
@@ -8103,6 +8499,7 @@ function renderAcademicSpaceV5(d) {
         return '<div style="text-align:center;background:#fff;border:1px solid var(--bdr);border-radius:6px;padding:8px">'
           + '<div style="font-size:.75rem;color:var(--navy);font-weight:700;letter-spacing:.04em">'+title+'</div>'
           + '<div style="display:flex;justify-content:space-around;margin-top:6px;gap:6px">'
+          +   '<div><div style="font-size:.65rem;color:var(--mut);text-transform:uppercase">Qty</div><div style="font-family:\'IBM Plex Mono\',monospace;font-size:1.1rem;font-weight:800;color:var(--navy)">'+buc.qty.toLocaleString()+'</div></div>'
           +   '<div><div style="font-size:.65rem;color:var(--mut);text-transform:uppercase">Seats</div><div style="font-family:\'IBM Plex Mono\',monospace;font-size:1.1rem;font-weight:800;color:var(--navy)">'+buc.seats.toLocaleString()+'</div></div>'
           +   '<div><div style="font-size:.65rem;color:var(--mut);text-transform:uppercase">NASF</div><div style="font-family:\'IBM Plex Mono\',monospace;font-size:1.1rem;font-weight:800;color:var(--navy)">'+buc.nasf.toLocaleString()+'</div></div>'
           +   (t ? '<div><div style="font-size:.65rem;color:var(--mut);text-transform:uppercase">SF/seat</div><div style="font-family:\'IBM Plex Mono\',monospace;font-size:1.1rem;font-weight:800;color:'+color+'">'+avgStr+'</div></div>' : '')
@@ -8147,7 +8544,7 @@ function renderAcademicSpaceV5(d) {
         return '<div style="text-align:center;background:#fff;border:1px solid var(--bdr);border-radius:6px;padding:8px">'
           + '<div style="font-size:.75rem;color:var(--navy);font-weight:700;letter-spacing:.04em">'+title+'</div>'
           + '<div style="display:flex;justify-content:space-around;margin-top:6px;gap:6px">'
-          +   '<div><div style="font-size:.65rem;color:var(--mut);text-transform:uppercase">Units</div><div style="font-family:\'IBM Plex Mono\',monospace;font-size:1.1rem;font-weight:800;color:var(--navy)">'+buc.qty.toLocaleString()+'</div></div>'
+          +   '<div><div style="font-size:.65rem;color:var(--mut);text-transform:uppercase">Qty</div><div style="font-family:\'IBM Plex Mono\',monospace;font-size:1.1rem;font-weight:800;color:var(--navy)">'+buc.qty.toLocaleString()+'</div></div>'
           +   '<div><div style="font-size:.65rem;color:var(--mut);text-transform:uppercase">NASF</div><div style="font-family:\'IBM Plex Mono\',monospace;font-size:1.1rem;font-weight:800;color:var(--navy)">'+buc.nasf.toLocaleString()+'</div></div>'
           +   (t ? '<div><div style="font-size:.65rem;color:var(--mut);text-transform:uppercase">People</div><div style="font-family:\'IBM Plex Mono\',monospace;font-size:1.1rem;font-weight:800;color:var(--navy)">'+buc.people.toLocaleString()+'</div></div>' : '')
           +   (t ? '<div><div style="font-size:.65rem;color:var(--mut);text-transform:uppercase">SF/person</div><div style="font-family:\'IBM Plex Mono\',monospace;font-size:1.1rem;font-weight:800;color:'+color+'">'+(sfp != null ? sfp.toFixed(0) : '—')+'</div></div>' : '')
@@ -8170,26 +8567,26 @@ function renderAcademicSpaceV5(d) {
     if (sec.perUnit && sec.hasOcc) {
       // Office: qty + occupancy-based metrics
       headers = hasCategoryCol
-        ? ['Item','Category','Qty','NASF/<br>Ea','Occ/<br>Ea','Total<br>NASF','People','Floor','On?','Notes','Action']
-        : ['Item','Qty','NASF/<br>Ea','Occ/<br>Ea','Total<br>NASF','People','Floor','On?','Notes','Action'];
+        ? ['Item','Category','Qty','NASF/<br>Ea','Occ/<br>Ea','Total<br>NASF','People','Floor','Notes','On?','↕']
+        : ['Item','Qty','NASF/<br>Ea','Occ/<br>Ea','Total<br>NASF','People','Floor','Notes','On?','↕'];
     } else if (sec.perUnit && sec.perSeat) {
       // Learning: qty + per-seat targets (no occupancy)
       headers = hasCategoryCol
-        ? ['Item','Category','Qty','NASF/<br>Ea','Total<br>NASF','Seats','SF/<br>Seat','Floor','On?','Notes','Action']
-        : ['Item','Qty','NASF/<br>Ea','Total<br>NASF','Seats','SF/<br>Seat','Floor','On?','Notes','Action'];
+        ? ['Item','Category','Qty','NASF/<br>Ea','Total<br>NASF','Seats','SF/<br>Seat','Floor','Notes','On?','↕']
+        : ['Item','Qty','NASF/<br>Ea','Total<br>NASF','Seats','SF/<br>Seat','Floor','Notes','On?','↕'];
     } else if (sec.perUnit) {
       // Community / Collaboration: qty only
       headers = hasCategoryCol
-        ? ['Item','Category','Qty','NASF/<br>Ea','Total<br>NASF','Floor','On?','Notes','Action']
-        : ['Item','Qty','NASF/<br>Ea','Total<br>NASF','Floor','On?','Notes','Action'];
+        ? ['Item','Category','Qty','NASF/<br>Ea','Total<br>NASF','Floor','Notes','On?','↕']
+        : ['Item','Qty','NASF/<br>Ea','Total<br>NASF','Floor','Notes','On?','↕'];
     } else if (sec.perSeat) {
       headers = hasCategoryCol
-        ? ['Item','Category','NASF','Seats','SF/seat','Floor','On?','Notes','Action']
-        : ['Item','NASF','Seats','SF/seat','Floor','On?','Notes','Action'];
+        ? ['Item','Category','NASF','Seats','SF/seat','Floor','Notes','On?','↕']
+        : ['Item','NASF','Seats','SF/seat','Floor','Notes','On?','↕'];
     } else {
       headers = hasCategoryCol
-        ? ['Item','Category','NASF','Floor','On?','Notes','Action']
-        : ['Item','NASF','Floor','On?','Notes','Action'];
+        ? ['Item','Category','NASF','Floor','Notes','On?','↕']
+        : ['Item','NASF','Floor','Notes','On?','↕'];
     }
     var notesStyle = "width:90px;font-size:.78rem;color:var(--navy);padding:4px 6px;border:1.5px solid var(--bdr);border-radius:6px;font-family:inherit";
     // v0.5.33: each table gets its own horizontal-scroll wrapper so the
@@ -8198,16 +8595,18 @@ function renderAcademicSpaceV5(d) {
     h += '<div style="overflow-x:auto;-webkit-overflow-scrolling:touch"><table class="comp comp-tight" style="font-size:.85rem"><tr>';
     headers.forEach(function(col){ h += '<th>'+col+'</th>'; });
     h += '</tr>';
-    var anyRow = false;
-    ACADEMIC_UNION.forEach(function(rec) {
+    // v0.6: pre-filter the rows for this section + scope so each row knows its
+    // neighbors (needed for the move up / down controls).
+    var visRows = ACADEMIC_UNION.filter(function(rec){
+      return sec.cats.indexOf(rec.item.cat) !== -1 && _itemScope(rec.item) === scope;
+    });
+    var anyRow = visRows.length > 0;
+    var _tid = 'aps-' + scope + '-' + sec.cats.join('_');   // unique per table for drag-reorder
+    visRows.forEach(function(rec, p) {
       var item = rec.item, src = rec.src, idx = rec.idx;
-      if (sec.cats.indexOf(item.cat) === -1) return;
-      // v0.5.33: only render items in this card's scope (ground vs upper).
-      if (_itemScope(item) !== scope) return;
-      anyRow = true;
-      var m = META[item.cat] || {};
-      h += '<tr>';
-      h += '<td><input type="text" value="'+(item.name||'').replace(/"/g,'&quot;')+'" oninput="_skillEditItem(\''+src+'\','+idx+',\'name\',this.value)" style="'+inpStyle+'"><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:'+(m.hex||'#888')+';margin-left:8px;vertical-align:middle"></span></td>';
+      h += '<tr data-tbl="'+_tid+'" data-src="'+src+'" data-idx="'+idx+'">';
+      // v0.6: color square removed per Tom.
+      h += '<td><input type="text" value="'+(item.name||'').replace(/"/g,'&quot;')+'" oninput="_skillEditItem(\''+src+'\','+idx+',\'name\',this.value)" style="'+inpStyle+'"></td>';
       // v0.5.40: only render the Category cell when this section spans
       // multiple cats (header is suppressed above for single-cat sections).
       if (hasCategoryCol) {
@@ -8250,7 +8649,7 @@ function renderAcademicSpaceV5(d) {
             ? ((sfPerSeat >= t.lo && sfPerSeat <= t.hi) ? 'var(--green)' : 'var(--coral)')
             : 'var(--mut)';
           h += '<td><input type="number" value="'+seats+'" min="0" onchange="_skillEditItem(\''+src+'\','+idx+',\'seats\',this.value)" style="'+smallNum+'"></td>';
-          h += '<td style="font-family:\'IBM Plex Mono\',monospace;font-weight:700;color:'+sfColor+';text-align:center">'+(sfPerSeat != null ? sfPerSeat.toFixed(1) : '—')+'</td>';
+          h += '<td style="font-family:\'IBM Plex Mono\',monospace;font-weight:700;color:var(--navy);text-align:center">'+(sfPerSeat != null ? sfPerSeat.toFixed(1) : '—')+'</td>';
         }
       } else {
         h += '<td><input type="number" value="'+item.nasf+'" onchange="_skillEditItem(\''+src+'\','+idx+',\'nasf\',this.value)" style="'+numStyle+'"></td>';
@@ -8262,7 +8661,7 @@ function renderAcademicSpaceV5(d) {
             ? ((sfPerSeat >= t.lo && sfPerSeat <= t.hi) ? 'var(--green)' : 'var(--coral)')
             : 'var(--mut)';
           h += '<td><input type="number" value="'+seats+'" min="0" onchange="_skillEditItem(\''+src+'\','+idx+',\'seats\',this.value)" style="'+smallNum+'"></td>';
-          h += '<td style="font-family:\'IBM Plex Mono\',monospace;font-weight:700;color:'+sfColor+';text-align:center">'+(sfPerSeat != null ? sfPerSeat.toFixed(1) : '—')+'</td>';
+          h += '<td style="font-family:\'IBM Plex Mono\',monospace;font-weight:700;color:var(--navy);text-align:center">'+(sfPerSeat != null ? sfPerSeat.toFixed(1) : '—')+'</td>';
         }
       }
       // v0.5.40: abbreviated floor labels — B / G / U×N / 2..N — to keep the
@@ -8272,20 +8671,22 @@ function renderAcademicSpaceV5(d) {
       if (_selFloor === 'all') _selFloor = 'upper';
       var _upperLabel = 'U×' + researchFloors;
       var _topFloor = (S.aboveGradeFloors || 1);
-      var _floorOpts = ['ground','upper','basement'];
+      var _floorOpts = ['ground','upper','penthouse','basement'];
       for (var _f = 2; _f <= _topFloor; _f++) _floorOpts.push(String(_f));
       _floorOpts.forEach(function(f){
         var label;
         if (f === 'upper')           label = _upperLabel;
         else if (f === 'ground')     label = 'G';
+        else if (f === 'penthouse')  label = 'PH';
         else if (f === 'basement')   label = 'B';
         else                         label = f;
         h += '<option value="'+f+'"'+(_selFloor===f?' selected':'')+'>'+label+'</option>';
       });
       h += '</select></td>';
+      // v0.6.1: Notes field (click → pop-out), On?, then drag handle + remove.
+      h += '<td>'+_skillNotesField(src, idx, item.notes)+'</td>';
       h += '<td><input type="checkbox" '+(item.on?'checked':'')+' onchange="_skillEditItem(\''+src+'\','+idx+',\'on\',this.checked);render()" style="transform:scale(1.3)"></td>';
-      h += '<td><input type="text" value="'+(item.notes||'').replace(/"/g,'&quot;')+'" oninput="_skillEditItem(\''+src+'\','+idx+',\'notes\',this.value)" placeholder="(notes)" style="'+notesStyle+'"></td>';
-      h += '<td><button class="btn btn-sm btn-out" onclick="_skillRemoveItem(\''+src+'\','+idx+')">Remove</button></td>';
+      h += _skillDragCell(src, idx);
       h += '</tr>';
     });
     if (!anyRow) h += '<tr><td colspan="'+headers.length+'" style="color:var(--mut);font-style:italic">(no '+sec.title.toLowerCase()+' items on '+(scope==='upper'?'upper floors':'ground floor')+')</td></tr>';
@@ -8327,6 +8728,12 @@ function renderAcademicSpaceV5(d) {
   });   // end scope.forEach
   h += '</div>';   // close two-column grid
 
+  // v0.6: Shared Facilities first (with the Shared Target Benchmark merged in
+  // at the top), then Program Support below it. The Academic Program Summary
+  // moves to the very bottom of the tab (after these two cards).
+  h += _renderSharedFacilitiesCardV5(d);
+  h += renderProgramSupportV5(d);
+
   // ============================================================
   // v0.5.34: presentation-ready summary table — designed for direct
   // copy/paste into a slide deck. Each item gets one row with Ground +
@@ -8339,7 +8746,21 @@ function renderAcademicSpaceV5(d) {
   h += '<h2 style="font-family:\'Sora\',sans-serif;font-size:1.4rem;font-weight:700;color:#1B3A5C;letter-spacing:-.01em">Academic Program Summary</h2>';
   h += '<span style="font-family:\'IBM Plex Mono\',monospace;font-size:.78rem;color:#6B6B6B;letter-spacing:.06em;text-transform:uppercase">Ground · Upper · Total · per Person</span>';
   h += '</div>';
-  h += '<div class="card-sub" style="margin-bottom:18px">Roll-up of every active academic item across the building. Upper-floor items multiplied by '+researchFloors+' research floors. Per-person columns show density against the building population (research FTE + PIs + office FTE = '+totalPeople.toLocaleString()+').</div>';
+  h += '<div class="card-sub" style="margin-bottom:14px">Roll-up of every active item on this tab — academic program, program support, and shared facilities. Upper-floor items multiplied by '+researchFloors+' research floors; basement items (program support / shared facilities) report in the Ground column. Per-person columns show density against the building population (research FTE + PIs + office FTE = '+totalPeople.toLocaleString()+').</div>';
+
+  // v0.6: per-column show/hide chips so the user can strip columns before a
+  // screenshot. Toggling a chip collapses that <col> via the #apsHideStyle
+  // rule (re-applied after every render by _apsApplyCols). 'Item' stays on.
+  window._apsHiddenCols = window._apsHiddenCols || {};
+  h += '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:14px;padding:8px 10px;background:#F7F4EF;border:1px solid #E0DBD5;border-radius:8px">';
+  h += '<span style="font-size:.72rem;font-weight:700;color:#6B6B6B;text-transform:uppercase;letter-spacing:.06em">Columns</span>';
+  [['qty','Qty'],['nasfeach','NASF Each'],['ground','Ground'],['upper','Upper'],['total','Total'],['seatocc','Seats/Occ'],['perperson','SF/Seat or /Person']].forEach(function(c){
+    var on = !window._apsHiddenCols[c[0]];
+    h += '<span data-apschip="'+c[0]+'" onclick="_apsToggleCol(\''+c[0]+'\')" style="cursor:pointer;user-select:none;font-size:.78rem;font-weight:600;padding:4px 10px;border-radius:14px;border:1.5px solid #1B3A5C;color:#1B3A5C;background:#fff;opacity:'+(on?'1':'.4')+';text-decoration:'+(on?'none':'line-through')+'">'+c[1]+'</span>';
+  });
+  h += '<span style="font-size:.7rem;color:#9CA0A5;margin-left:4px">tap to hide for screenshots</span>';
+  h += '</div>';
+  h += '<style id="apsHideStyle"></style>';
 
   // Group display: hex = light row tint; textHex = darkest in family for category heading text.
   // Pulled from FICM legend: 1a=#98ACE5 (office), 2a=#66C6C1 (learning), 3d=#FFE885 (community),
@@ -8353,7 +8774,9 @@ function renderAcademicSpaceV5(d) {
     { key:'learning_support',label:'Learning Support', hex:'#66C6C1', textHex:'#66C6C1' },
     { key:'office_enclosed', label:'Enclosed Offices', hex:'#98ACE5', textHex:'#98ACE5' },
     { key:'office_open',     label:'Open Workspaces',  hex:'#98ACE5', textHex:'#98ACE5' },
-    { key:'office_support',  label:'Office Support',   hex:'#98ACE5', textHex:'#98ACE5' }
+    { key:'office_support',  label:'Office Support',   hex:'#98ACE5', textHex:'#98ACE5' },
+    { key:'support',         label:'Program Support',  hex:'#C2C3C8', textHex:'#C2C3C8' },
+    { key:'shared',          label:'Shared Facilities',hex:'#E086C0', textHex:'#E086C0' }
   ];
   function _itemTotals(it) {
     var qty   = +(it.qty || (it.nasf > 0 ? 1 : 0));
@@ -8390,6 +8813,13 @@ function renderAcademicSpaceV5(d) {
   var pop = totalPeople || 1;
 
   h += '<table style="width:100%;border-collapse:collapse;font-family:inherit">';
+  // v0.6: colgroup so each column can be collapsed independently for clean
+  // screenshots. Keys match the chip bar above.
+  h += '<colgroup>';
+  ['item','qty','nasfeach','ground','upper','total','seatocc','perperson'].forEach(function(k){
+    h += '<col class="apscol" data-col="'+k+'">';
+  });
+  h += '</colgroup>';
   h += '<thead><tr style="border-bottom:2.5px solid #1B3A5C">';
   // v0.5.39: header labels per user feedback —
   //   • all column headers center-aligned
@@ -8405,11 +8835,27 @@ function renderAcademicSpaceV5(d) {
   SUMMARY_ORDER.forEach(function(grp, grpIdx) {
     // Collect rows for this category
     var rows = [];
-    _allAcademicItems().forEach(function(it) {
-      if (!it.on) return;
-      if (it.cat !== grp.key) return;
-      rows.push({ item: it, t: _itemTotals(it) });
-    });
+    if (grp.key === 'shared') {
+      // Shared facilities live on S.coreItems (basement-located, name + NASF).
+      (S.coreItems || []).forEach(function(c) {
+        if (!c.on) return;
+        var pseudo = { name: c.name, nasf: +(c.nasf || 0), qty: 1, nasf_each: +(c.nasf || 0), on: true, floor: 'basement' };
+        rows.push({ item: pseudo, t: _itemTotals(pseudo) });
+      });
+    } else if (grp.key === 'support') {
+      // Program support items live on S.gfProgram / S.upperCommunity (cat=support).
+      (S.gfProgram || []).concat(S.upperCommunity || []).forEach(function(it) {
+        if (!it.on) return;
+        if (it.cat !== 'support') return;
+        rows.push({ item: it, t: _itemTotals(it) });
+      });
+    } else {
+      _allAcademicItems().forEach(function(it) {
+        if (!it.on) return;
+        if (it.cat !== grp.key) return;
+        rows.push({ item: it, t: _itemTotals(it) });
+      });
+    }
     if (!rows.length) return;
     // v0.5.39: small spacer row before each category (except first) to
     // visually separate the prior subtotal from the next category heading.
@@ -8468,7 +8914,7 @@ function renderAcademicSpaceV5(d) {
   });
   // Grand total — Seats/Occ + SF/Seat columns blank (per user spec: "don't sum / don't average")
   h += '<tr style="background:#1B3A5C;color:#fff">';
-  h += '<td colspan="3" style="padding:12px;font-family:\'Sora\',sans-serif;font-size:.92rem;font-weight:800;letter-spacing:.04em;color:#fff;text-align:right">Building Total Academic Program</td>';
+  h += '<td colspan="3" style="padding:12px;font-family:\'Sora\',sans-serif;font-size:.92rem;font-weight:800;letter-spacing:.04em;color:#fff;text-align:right">Building Total Program</td>';
   h += '<td style="text-align:center;padding:12px;font-family:\'IBM Plex Mono\',monospace;font-size:1rem;font-weight:800;color:#fff">'+grandGF.toLocaleString()+'</td>';
   h += '<td style="text-align:center;padding:12px;font-family:\'IBM Plex Mono\',monospace;font-size:1rem;font-weight:800;color:#fff">'+grandUpTotal.toLocaleString()+'</td>';
   h += '<td style="text-align:center;padding:12px;font-family:\'IBM Plex Mono\',monospace;font-size:1.2rem;font-weight:800;color:#fff">'+grandTotal.toLocaleString()+'</td>';
@@ -8518,11 +8964,10 @@ function renderProgramSupportV5(d) {
   // v0.5.3: bigger fonts on inputs
   var inpStyle = "width:280px;font-size:.95rem;font-weight:500;color:var(--navy);padding:6px 8px;border:1.5px solid var(--bdr);border-radius:6px";
   var numStyle = "width:90px;font-size:.95rem;font-weight:600;color:var(--navy);padding:6px 8px;border:1.5px solid var(--bdr);border-radius:6px;text-align:right";
-  h += '<table class="comp"><tr><th>Item</th><th>NASF</th><th>Floor</th><th>On?</th><th>Notes</th><th>Action</th></tr>';
-  var psNotesStyle = "width:220px;font-size:.88rem;color:var(--navy);padding:6px 8px;border:1.5px solid var(--bdr);border-radius:6px;font-family:inherit";
-  function _renderRow(item, src, idx) {
+  h += '<table class="comp"><tr><th>Item</th><th>NASF</th><th>Floor</th><th>Notes</th><th>On?</th><th>↕</th></tr>';
+  function _renderRow(item, src, idx, prev, next) {
     if (item.cat !== 'support') return;
-    h += '<tr>';
+    h += '<tr data-tbl="aps-support" data-src="'+src+'" data-idx="'+idx+'">';
     h += '<td><input type="text" value="'+(item.name||'').replace(/"/g,'&quot;')+'" oninput="_skillEditItem(\''+src+'\','+idx+',\'name\',this.value)" style="'+inpStyle+'"></td>';
     h += '<td><input type="number" value="'+item.nasf+'" onchange="_skillEditItem(\''+src+'\','+idx+',\'nasf\',this.value)" style="'+numStyle+'"></td>';
     // v0.5.40: abbreviated floor labels (B/G/U×N/2..N) to keep column narrow.
@@ -8532,24 +8977,30 @@ function renderProgramSupportV5(d) {
     var _researchFloors = Math.max(0, (S.aboveGradeFloors || 0) - 1);
     var _upperLabel = 'U×' + _researchFloors;
     var _topFloor = (S.aboveGradeFloors || 1);
-    var _floorOpts = ['basement','ground','upper'];
+    var _floorOpts = ['basement','ground','upper','penthouse'];
     for (var _f = 2; _f <= _topFloor; _f++) _floorOpts.push(String(_f));
     _floorOpts.forEach(function(f){
       var label;
-      if (f === 'upper')         label = _upperLabel;
-      else if (f === 'ground')   label = 'G';
-      else if (f === 'basement') label = 'B';
-      else                       label = f;
+      if (f === 'upper')          label = _upperLabel;
+      else if (f === 'ground')    label = 'G';
+      else if (f === 'penthouse') label = 'PH';
+      else if (f === 'basement')  label = 'B';
+      else                        label = f;
       h += '<option value="'+f+'"'+(_selFloor===f?' selected':'')+'>'+label+'</option>';
     });
     h += '</select></td>';
+    // v0.6.1: Notes field (click → pop-out), On?, then drag handle + remove.
+    h += '<td>'+_skillNotesField(src, idx, item.notes)+'</td>';
     h += '<td><input type="checkbox" '+(item.on?'checked':'')+' onchange="_skillEditItem(\''+src+'\','+idx+',\'on\',this.checked);render()" style="transform:scale(1.3)"></td>';
-    h += '<td><input type="text" value="'+(item.notes||'').replace(/"/g,'&quot;')+'" oninput="_skillEditItem(\''+src+'\','+idx+',\'notes\',this.value)" placeholder="(notes)" style="'+psNotesStyle+'"></td>';
-    h += '<td><button class="btn btn-sm btn-out" onclick="_skillRemoveItem(\''+src+'\','+idx+')">Remove</button></td>';
+    h += _skillDragCell(src, idx);
     h += '</tr>';
   }
-  (S.gfProgram || []).forEach(function(item, idx) { _renderRow(item, 'gfProgram', idx); });
-  (S.upperCommunity || []).forEach(function(item, idx) { _renderRow(item, 'upperCommunity', idx); });
+  // v0.6: collect support rows across both arrays first so each row knows its
+  // neighbors for the move up / down controls.
+  var psRows = [];
+  (S.gfProgram || []).forEach(function(item, idx){ if (item.cat === 'support') psRows.push({item:item, src:'gfProgram', idx:idx}); });
+  (S.upperCommunity || []).forEach(function(item, idx){ if (item.cat === 'support') psRows.push({item:item, src:'upperCommunity', idx:idx}); });
+  psRows.forEach(function(rec, p){ _renderRow(rec.item, rec.src, rec.idx, psRows[p-1]||null, psRows[p+1]||null); });
   h += '</table>';
   h += '<div style="margin-top:8px"><button class="btn btn-sm btn-navy" onclick="S.gfProgram.push({name:\'New Program Support item\',nasf:500,on:true,cat:\'support\',floor:\'basement\'});render()">+ Add Program Support item</button></div>';
   h += '</div>';
@@ -8558,7 +9009,7 @@ function renderProgramSupportV5(d) {
 
 // ============================================================
 // FLOOR STACKING (v0.5 revised) — keep the original visual the user liked,
-// strip DGSF labels, append Visual 2 (GFA-width) + circulation controls.
+// strip DGSF labels, append Visual 2 (GSF-width) + circulation controls.
 // The original placement scattered across Basement / Floor Stacking /
 // Community tabs is preserved (per user feedback the centralized table was
 // "terrible — super cumbersome").
@@ -8568,7 +9019,7 @@ function renderFloorStackingV5(d) {
   var html = (typeof renderStacking === 'function') ? renderStacking(d) : '';
   // Strip DGSF mentions from the descriptive prose (card-sub and how-to-read).
   // The numeric DGSF row is already removed by the floorVis override above.
-  html = html.replace(/Departmental Gross \(DGSF = GFA × \d+%\),\s*and Gross Floor Area/g, 'and Gross Floor Area');
+  html = html.replace(/Departmental Gross \(DGSF = GSF × \d+%\),\s*and Gross Square Feet/g, 'and Gross Square Feet');
   html = html.replace(/<strong style="color:var\(--teal\)">DGSF<\/strong>[^,]*,\s*and\s*/g, 'and ');
   html = html.replace(/three area measures/g, 'two area measures');
   // Split the per-floor "Community" segment on upper floors into per-cat
@@ -8633,7 +9084,7 @@ function renderFloorStackingV5(d) {
   // Section — Program Distribution" naming pattern). Card is repositioned
   // immediately below Visual 1 by _skillMoveVisual2() after innerHTML.
   var v2 = '<div class="card" data-skill-card="visual2"><div class="card-title">Building Section — Gross Area</div>';
-  v2 += '<div class="card-sub">Bar width = total GFA on the floor. NASF in navy, circulation in <span style="display:inline-block;width:10px;height:10px;background:'+circHex+';border-radius:2px;vertical-align:middle"></span> '+circHex+', building support in <span style="display:inline-block;width:10px;height:10px;background:#C2C3C8;border-radius:2px;vertical-align:middle"></span> #C2C3C8.</div>';
+  v2 += '<div class="card-sub">Bar width = total GSF on the floor. NASF in navy, circulation in <span style="display:inline-block;width:10px;height:10px;background:'+circHex+';border-radius:2px;vertical-align:middle"></span> '+circHex+', building support in <span style="display:inline-block;width:10px;height:10px;background:#C2C3C8;border-radius:2px;vertical-align:middle"></span> #C2C3C8.</div>';
 
   v2 += '<h3 style="font-size:1rem;font-weight:700;color:var(--navy);margin:14px 0 6px">Circulation Controls</h3>';
   v2 += '<div class="sl-row" style="margin:8px 0"><label class="sl">Global circulation %</label>';
@@ -8727,7 +9178,7 @@ function _skillBuildGFAFloorRows(d) {
     h += '<div style="font-family:\'IBM Plex Mono\',monospace;font-size:.75rem;font-weight:600;min-width:155px;text-align:right;line-height:1.45">';
     h += '<span style="color:var(--navy)">'+F(Math.round(nasf))+'</span> <span style="color:var(--mut);font-weight:400">NASF</span><br>';
     h += '<span style="color:#C99000">'+F(Math.round(circ))+'</span> <span style="color:var(--mut);font-weight:400">CIRC</span><br>';
-    h += '<span style="color:var(--mut)">'+F(Math.round(floorGSF))+'</span> <span style="color:var(--mut);font-weight:400">GFA</span>';
+    h += '<span style="color:var(--mut)">'+F(Math.round(floorGSF))+'</span> <span style="color:var(--mut);font-weight:400">GSF</span>';
     h += '</div>';
     h += '</div>';
     return h;
@@ -8735,14 +9186,20 @@ function _skillBuildGFAFloorRows(d) {
 
   var h = '';
 
-  // Penthouse (all building support — penthouse efficiency typically 0)
-  h += rowHTML('Penthouse',
-    [
-      { label:'NASF', sf:0, color:nasfHex, textColor:'#fff' },
-      { label:'Circulation', sf:0, color:circHex, textColor:'#1A1A1A' },
-      { label:'Building Support', sf:S.penthouseGSF, color:supportHex, textColor:'#1A1A1A' }
-    ],
-    S.penthouseGSF || 0);
+  // Penthouse — shows NASF + circulation once its efficiency > 0; otherwise
+  // all building support (mechanical only).
+  var _phN = (d && d.penthouseNASF) || Math.round((S.penthouseGSF || 0) * (S.penthouseEff || 0));
+  if (_phN > 0) {
+    h += rowHTML('Penthouse', buildSegments(S.penthouseGSF, _phN, getCircPct('PH')), S.penthouseGSF || 0);
+  } else {
+    h += rowHTML('Penthouse',
+      [
+        { label:'NASF', sf:0, color:nasfHex, textColor:'#fff' },
+        { label:'Circulation', sf:0, color:circHex, textColor:'#1A1A1A' },
+        { label:'Building Support', sf:S.penthouseGSF, color:supportHex, textColor:'#1A1A1A' }
+      ],
+      S.penthouseGSF || 0);
+  }
 
   // Upper research floors (top down)
   var topFloor = S.aboveGradeFloors || 0;
@@ -9278,12 +9735,12 @@ function _skillRound50(n) {
 
 // v0.5.18: PIs-by-Floor section chart. Mirrors _skillBuildGFAFloorRows
 // (same row class names, same right-side numeric stack styling, same
-// ground-line separator). Each floor's bar is sized to the floor's GFA so
+// ground-line separator). Each floor's bar is sized to the floor's GSF so
 // the rows align horizontally with the Building Section chart above.
 // Within the bar, each segment is one PI typology, sized to that typology's
 // total NASF claim on that floor. Right-side stack reports PI count + NASF.
 function _skillBuildPIFloorRows(d) {
-  // v0.5.28: bars now represent RESEARCH NASF only (was floor GFA), so the
+  // v0.5.28: bars now represent RESEARCH NASF only (was floor GSF), so the
   // typology segments fill 100% of the bar to the extent there's programmed
   // research space on that floor. Bar width itself is scaled to the floor
   // with the largest research-NASF claim.
@@ -9568,6 +10025,164 @@ window._skillRemoveItem = function(src, idx) {
   render();
 };
 
+// ============================================================
+// v0.6: row reordering + pop-out notes — shared by every editable program
+// table (academic, program support, shared facilities). `arrName` is the
+// literal S property name ('gfProgram' | 'upperCommunity' | 'coreItems').
+// ============================================================
+
+// Swap two item objects between their array slots (the rows may live in
+// different arrays — e.g. a ground item whose floor was set to 'upper').
+window._skillSwapItems = function(srcA, idxA, srcB, idxB) {
+  var a = S[srcA], b = S[srcB];
+  if (!a || !b || !a[idxA] || !b[idxB]) return;
+  var tmp = a[idxA]; a[idxA] = b[idxB]; b[idxB] = tmp;
+  render();
+};
+
+// Pop-out multiline notes editor.
+window._skillOpenNotes = function(arrName, idx) {
+  var item = (S[arrName] || [])[idx];
+  if (!item) return;
+  _skillCloseNotes();
+  var ov = document.createElement('div');
+  ov.id = 'notesOverlay';
+  ov.style.cssText = 'position:fixed;inset:0;background:rgba(15,25,40,.45);z-index:99999;display:flex;align-items:center;justify-content:center;padding:20px';
+  var box = document.createElement('div');
+  box.style.cssText = 'background:#fff;border-radius:14px;padding:22px;width:min(560px,94vw);box-shadow:0 18px 50px rgba(0,0,0,.3)';
+  box.innerHTML =
+      '<div style="font-family:\'Sora\',sans-serif;font-size:1.1rem;font-weight:700;color:var(--navy);margin-bottom:4px">Notes</div>'
+    + '<div style="font-size:.82rem;color:var(--mut);margin-bottom:12px">'+((item.name||'Item')+'').replace(/</g,'&lt;')+'</div>'
+    + '<textarea id="notesArea" placeholder="Type notes… (multiple lines OK)" style="width:100%;min-height:170px;font-family:inherit;font-size:.95rem;line-height:1.45;color:var(--navy);padding:12px;border:1.5px solid var(--bdr);border-radius:10px;resize:vertical;box-sizing:border-box"></textarea>'
+    + '<div style="display:flex;justify-content:flex-end;gap:10px;margin-top:14px">'
+    +   '<button class="btn btn-out btn-sm" onclick="_skillCloseNotes()">Cancel</button>'
+    +   '<button class="btn btn-navy btn-sm" onclick="_skillSaveNotes(\''+arrName+'\','+idx+')">Save</button>'
+    + '</div>';
+  ov.appendChild(box);
+  ov.addEventListener('click', function(e){ if (e.target === ov) _skillCloseNotes(); });
+  document.body.appendChild(ov);
+  var ta = document.getElementById('notesArea');
+  if (ta) { ta.value = item.notes || ''; ta.focus(); }
+};
+window._skillSaveNotes = function(arrName, idx) {
+  var item = (S[arrName] || [])[idx];
+  var ta = document.getElementById('notesArea');
+  if (item && ta) item.notes = ta.value;
+  _skillCloseNotes();
+  render();
+};
+window._skillCloseNotes = function() {
+  var ov = document.getElementById('notesOverlay');
+  if (ov && ov.parentNode) ov.parentNode.removeChild(ov);
+};
+
+// Notes cell — a short read-only text field that shows the note and opens the
+// multiline pop-out editor on click (per Tom: no button, just a field).
+window._skillNotesField = function(arrName, idx, notes) {
+  var esc = (notes || '').replace(/"/g, '&quot;');
+  return '<input type="text" readonly value="'+esc+'" placeholder="notes…" '
+       + 'onclick="_skillOpenNotes(\''+arrName+'\','+idx+')" title="Click to edit notes" '
+       + 'style="width:120px;font-size:.8rem;color:var(--navy);padding:4px 6px;border:1.5px solid var(--bdr);border-radius:6px;font-family:inherit;cursor:pointer;background:#fff;text-overflow:ellipsis">';
+};
+
+// Notes cell button — shows a one-line preview, opens the pop-out on click.
+window._skillNotesBtn = function(arrName, idx, notes) {
+  var t = (notes || '').trim();
+  var preview = t ? (t.length > 16 ? t.slice(0, 16) + '…' : t) : '+ Note';
+  var titleEsc = t.replace(/"/g, '&quot;');
+  return '<button class="btn btn-sm btn-out" title="'+titleEsc+'" onclick="_skillOpenNotes(\''+arrName+'\','+idx+')" '
+       + 'style="max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap'+(t ? '' : ';color:var(--mut)')+'">'
+       + preview.replace(/</g, '&lt;') + '</button>';
+};
+
+// Row controls cell — move up / move down / remove. `prev` / `next` are the
+// neighbor records ({src, idx}) in the same visible table, or null at the ends.
+window._skillRowControls = function(arrName, idx, prev, next, removeCall) {
+  var rm = removeCall || ('_skillRemoveItem(\''+arrName+'\','+idx+')');
+  var up = prev
+    ? '<button class="btn btn-sm btn-out" style="padding:2px 7px" title="Move up" onclick="_skillSwapItems(\''+arrName+'\','+idx+',\''+prev.src+'\','+prev.idx+')">▲</button>'
+    : '<button class="btn btn-sm btn-out" style="padding:2px 7px;opacity:.3;cursor:default" disabled>▲</button>';
+  var dn = next
+    ? '<button class="btn btn-sm btn-out" style="padding:2px 7px" title="Move down" onclick="_skillSwapItems(\''+arrName+'\','+idx+',\''+next.src+'\','+next.idx+')">▼</button>'
+    : '<button class="btn btn-sm btn-out" style="padding:2px 7px;opacity:.3;cursor:default" disabled>▼</button>';
+  return up + ' ' + dn + ' <button class="btn btn-sm btn-out" onclick="'+rm+'">Remove</button>';
+};
+
+// ============================================================
+// v0.6.1: drag-to-reorder. Replaces the ▲/▼ buttons — grab a row's grip and
+// slide it up or down. Rows carry data-tbl / data-src / data-idx; reordering
+// rewrites the item objects back into the same array slots in the new visual
+// order (works even when a table mixes gfProgram + upperCommunity rows). A
+// small ✕ stays in the handle cell so rows can still be removed.
+// ============================================================
+window._skillDragCell = function(src, idx, removeCall) {
+  var rm = removeCall || ('_skillRemoveItem(\''+src+'\','+idx+')');
+  return '<td class="dnd-handle" style="white-space:nowrap;text-align:center">'
+    + '<span class="dnd-grip" draggable="true" title="Drag to reorder" style="cursor:grab;font-size:1.05rem;color:var(--mut);user-select:none;padding:0 4px">⠿</span>'
+    + '<button class="btn btn-sm btn-out" title="Remove" onclick="'+rm+'" style="padding:1px 7px;margin-left:4px;color:var(--coral);border-color:var(--coral)">✕</button>'
+    + '</td>';
+};
+window._skillClearDropMarks = function() {
+  var rows = document.querySelectorAll('tr[data-tbl]');
+  for (var i = 0; i < rows.length; i++) { rows[i].style.boxShadow = ''; rows[i].removeAttribute('data-after'); }
+};
+window._skillDropReorder = function(tid, dragSlot, targetSlot, after) {
+  var rows = Array.prototype.slice.call(document.querySelectorAll('tr[data-tbl="'+tid+'"]'));
+  var slots = rows.map(function(tr){ return { src: tr.getAttribute('data-src'), idx: +tr.getAttribute('data-idx') }; });
+  if (!slots.length) return;
+  var items = slots.map(function(s){ return S[s.src][s.idx]; });
+  function findPos(s){ for (var i=0;i<slots.length;i++){ if (slots[i].src===s.src && slots[i].idx===s.idx) return i; } return -1; }
+  var from = findPos(dragSlot), tgt = findPos(targetSlot);
+  if (from < 0 || tgt < 0 || from === tgt) { render(); return; }
+  var insert = after ? tgt + 1 : tgt;
+  var moved = items.splice(from, 1)[0];
+  if (from < insert) insert--;
+  items.splice(insert, 0, moved);
+  for (var k = 0; k < slots.length; k++) { S[slots[k].src][slots[k].idx] = items[k]; }
+  render();
+};
+// (Re)wire drag handlers after each render. Grips are the drag source; any row
+// in the same table is a drop target. Called from the Academic Space dispatch.
+window._skillInitDnD = function() {
+  _skillClearDropMarks();
+  var grips = document.querySelectorAll('.dnd-grip');
+  for (var i = 0; i < grips.length; i++) {
+    (function(g){
+      g.addEventListener('dragstart', function(e){
+        var tr = g.closest('tr'); if (!tr) return;
+        window._skillDrag = { tbl: tr.getAttribute('data-tbl'), src: tr.getAttribute('data-src'), idx: +tr.getAttribute('data-idx') };
+        e.dataTransfer.effectAllowed = 'move';
+        try { e.dataTransfer.setData('text/plain', 'row'); } catch(_) {}
+        tr.style.opacity = '.4';
+      });
+      g.addEventListener('dragend', function(){
+        var tr = g.closest('tr'); if (tr) tr.style.opacity = '';
+        window._skillDrag = null; _skillClearDropMarks();
+      });
+    })(grips[i]);
+  }
+  var rows = document.querySelectorAll('tr[data-tbl]');
+  for (var j = 0; j < rows.length; j++) {
+    (function(tr){
+      tr.addEventListener('dragover', function(e){
+        var d = window._skillDrag; if (!d || tr.getAttribute('data-tbl') !== d.tbl) return;
+        e.preventDefault(); e.dataTransfer.dropEffect = 'move';
+        _skillClearDropMarks();
+        var rect = tr.getBoundingClientRect();
+        var aft = (e.clientY - rect.top) > rect.height / 2;
+        tr.style.boxShadow = aft ? 'inset 0 -3px 0 0 var(--navy)' : 'inset 0 3px 0 0 var(--navy)';
+        tr.setAttribute('data-after', aft ? '1' : '0');
+      });
+      tr.addEventListener('drop', function(e){
+        var d = window._skillDrag; if (!d || tr.getAttribute('data-tbl') !== d.tbl) return;
+        e.preventDefault();
+        var aft = tr.getAttribute('data-after') === '1';
+        _skillDropReorder(d.tbl, d, { src: tr.getAttribute('data-src'), idx: +tr.getAttribute('data-idx') }, aft);
+      });
+    })(rows[j]);
+  }
+};
+
 // Convenience: gather every academic item across both arrays for aggregation
 function _allAcademicItems() {
   var ACADEMIC_CATS = ['community','collaboration','event','classroom','teaching_lab','learning_support','office_enclosed','office_open','office_support'];
@@ -9596,12 +10211,12 @@ window._skillStripDGSF = function() {
     if (!content) return;
     // The original visual uses HTML with the literal text "DGSF" in card-sub,
     // table headers ("DGSF"), and inline label cells. We drop columns + cells
-    // whose header reads exactly "DGSF" to keep NASF + GFA + others.
+    // whose header reads exactly "DGSF" to keep NASF + GSF + others.
     // 1. Strip DGSF mention from any card-sub paragraph
     Array.prototype.forEach.call(content.querySelectorAll('.card-sub'), function(el) {
       if (el.innerHTML.indexOf('DGSF') !== -1) {
         el.innerHTML = el.innerHTML.replace(/Departmental Gross[^,]*?,?\s*/g, '')
-                                    .replace(/DGSF\s*=\s*GFA\s*×\s*\d+%[^,]*?,?\s*/g, '')
+                                    .replace(/DGSF\s*=\s*GSF\s*×\s*\d+%[^,]*?,?\s*/g, '')
                                     .replace(/\(DGSF[^)]*\)/g, '');
       }
     });
@@ -10167,7 +10782,7 @@ function _skillDrawStackVisual(elId, d, mode) {
   var el = document.getElementById(elId);
   if (!el) return;
   var floors = S.aboveGradeFloors || 4;
-  // Compute per-floor NASF + GFA
+  // Compute per-floor NASF + GSF
   var rows = [];
   var META = window.CATEGORY_META || {};
   function getFloorNASF(floorKey) {
@@ -10255,7 +10870,7 @@ function _skillDrawStackVisual(elId, d, mode) {
     var x = barX;
 
     if (mode === 'gfa') {
-      // GFA mode: draw NASF chunk, then circulation, then building support
+      // GSF mode: draw NASF chunk, then circulation, then building support
       // NASF in navy (overall), circulation #FEB522, support #C2C3C8
       var nasfW = (p.nasf / p.total) * widthScale;
       var circW = (p.circ  / p.total) * widthScale;
@@ -10283,7 +10898,7 @@ function _skillDrawStackVisual(elId, d, mode) {
       var totalLab = document.createElementNS(svgNS, 'text');
       totalLab.setAttribute('x', barX + widthScale + 6); totalLab.setAttribute('y', y + rowH/2 + 4);
       totalLab.setAttribute('font-family', 'IBM Plex Mono,monospace'); totalLab.setAttribute('font-size', '11');
-      totalLab.setAttribute('fill', '#666'); totalLab.textContent = Math.round(p.total).toLocaleString() + ' GFA';
+      totalLab.setAttribute('fill', '#666'); totalLab.textContent = Math.round(p.total).toLocaleString() + ' GSF';
       svg.appendChild(totalLab);
     } else {
       // NASF mode: per-category segments
@@ -10317,7 +10932,7 @@ function _skillDrawStackVisual(elId, d, mode) {
 function renderCostV5(d) {
   var html = renderCost(d);
   // Strip the entire "Departmental Gross (DGSF) Model" card — the new
-  // Program Areas table sources DGSF/GFA from the Floor Stacking circulation
+  // Program Areas table sources DGSF/GSF from the Floor Stacking circulation
   // and building-support sliders, so this single-knob card is obsolete.
   html = html.replace(/<div class="card"><div class="card-title">Departmental Gross[\s\S]*?<\/div>\s*<\/div>/, '');
   // Belt-and-suspenders: strip any orphan setDeptGross slider that survived.
@@ -10328,7 +10943,7 @@ function renderCostV5(d) {
   html = html.replace(/<div>\+ <span[\s\S]*?MEP\/Infra[\s\S]*?<\/div>/g, '');
   // v0.5.18: the old "Program Area & Fitout (v0.5)" duplicate table was
   // removed — base_dashboard.html's Program Areas table now carries the
-  // canonical NASF → Pro-Rata Circ → DGSF → Bldg Sup → GFA columns sourced
+  // canonical NASF → Pro-Rata Circ → DGSF → Bldg Sup → GSF columns sourced
   // from S.cost.progLines + Floor-Stacking circ/bldg-support sliders.
   return html;
 }
@@ -10564,6 +11179,69 @@ render();
 // reads top-to-bottom like a stack of money, and the milestone lines on
 // the right give you the three totals you actually quote in conversation.
 // ──────────────────────────────────────────────────────────────────
+// v0.7: Cost Composition as a full-width horizontal stacked bar (replaces the
+// vertical tower). Segments follow the project-cost buildup; milestones below
+// mark Base Construction, Hard Cost, and Total Project.
+function _skillBuildCostCompositionBar(d, cs) {
+  var segs = [
+    { label:'Core & Shell',            amount: cs.totalCoreShell,          color:'#1B3A5C', tc:'#fff' },
+    { label:'Fitout',                  amount: cs.totalFitout,             color:'#E8D4C6', tc:'#1B3A5C' },
+    { label:'Site & Demo',             amount: cs.totalSite,               color:'#CDD5C6', tc:'#1B3A5C' },
+    { label:'Design Contingency',      amount: cs.designContingency,       color:'#A7B4C2', tc:'#1B3A5C' },
+    { label:'Construction Contingency',amount: cs.constructionContingency, color:'#6E7E90', tc:'#fff' },
+    { label:'Escalation',              amount: cs.escalationCost,          color:'#FFE2C3', tc:'#7A4A11' }
+  ];
+  if (cs.tariffCost > 0) segs.push({ label:'Tariff', amount: cs.tariffCost, color:'#B07A2A', tc:'#fff' });
+  var softColors = ['#5A5F66','#737A82','#8C929A','#A6ABB1','#C2C6CA'];
+  (cs.softLines || []).forEach(function(s, i){
+    segs.push({ label:s.label, amount:s.amount, color:softColors[i % softColors.length], tc:(i<2?'#fff':'#1B3A5C') });
+  });
+  var total = cs.projectCost || segs.reduce(function(a,s){ return a + s.amount; }, 0);
+
+  var card = '<div class="card"><div class="card-title">Cost Composition</div>';
+  card += '<div class="card-sub">Every component stacked left-to-right into the total project cost. Hover a band for its share. Milestones below mark the three running totals you quote.</div>';
+
+  // Horizontal stacked bar
+  card += '<div style="display:flex;width:100%;height:50px;border-radius:8px;overflow:hidden;border:1px solid var(--bdr)">';
+  segs.forEach(function(s){
+    if (!s.amount || s.amount <= 0) return;
+    var pct = total > 0 ? (s.amount / total * 100) : 0;
+    var inside = pct > 7 ? FMM(s.amount) : (pct > 3 ? '•' : '');
+    card += '<div title="'+s.label+': '+FMM(s.amount)+' ('+pct.toFixed(1)+'%)" '
+         +  'style="width:'+pct+'%;background:'+s.color+';color:'+s.tc+';display:flex;align-items:center;justify-content:center;'
+         +  'font-family:\'IBM Plex Mono\',monospace;font-size:.72rem;font-weight:700;overflow:hidden;white-space:nowrap">'+inside+'</div>';
+  });
+  card += '</div>';
+
+  // Legend
+  card += '<div style="display:flex;flex-wrap:wrap;gap:10px 16px;margin-top:12px">';
+  segs.forEach(function(s){
+    if (!s.amount || s.amount <= 0) return;
+    var pct = total > 0 ? (s.amount / total * 100) : 0;
+    card += '<div style="display:flex;align-items:center;gap:6px;font-size:.78rem;color:var(--navy)">'
+         +  '<span style="width:12px;height:12px;border-radius:3px;background:'+s.color+';border:1px solid rgba(0,0,0,.08)"></span>'
+         +  '<span style="font-weight:600">'+s.label+'</span>'
+         +  '<span style="font-family:\'IBM Plex Mono\',monospace;color:#5A5F66">'+FMM(s.amount)+' · '+pct.toFixed(1)+'%</span></div>';
+  });
+  card += '</div>';
+
+  // Milestones
+  function _mile(label, amount, strong){
+    return '<div style="flex:1;min-width:150px;padding:10px 12px;background:var(--bg);border-radius:8px;border:1px solid var(--bdr)">'
+      + '<div style="font-size:.7rem;text-transform:uppercase;letter-spacing:.06em;color:#5A5F66;font-weight:700">'+label+'</div>'
+      + '<div style="font-family:\'IBM Plex Mono\',monospace;font-weight:'+(strong?'900':'700')+';font-size:'+(strong?'1.35rem':'1.15rem')+';color:var(--navy)">'+FMM(amount)+'</div>'
+      + '<div style="font-size:.72rem;color:#9AA0A6">$'+F(Math.round((d.totalGSF>0?amount/d.totalGSF:0)))+'/GSF</div></div>';
+  }
+  card += '<div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:14px">';
+  card += _mile('Base Construction (Q'+S.cost.baseQuarter+' '+S.cost.baseYear+')', cs.constructionCost, false);
+  card += _mile('Hard Cost', cs.hardCost, false);
+  card += _mile('Total Project', cs.projectCost, true);
+  card += '</div>';
+
+  card += '</div>';
+  return card;
+}
+
 function _skillBuildHorizontalWaterfall(d, cs) {
   // Compose the segments. We stack from BOTTOM → TOP so the first item
   // (Core & Shell) is the foundation. Order matches the cost flow.
