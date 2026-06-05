@@ -835,10 +835,19 @@ function calcCost(totalGSF, totalNASF, piNASF, coreNASF, commNASF, eventNASF, su
   var cs = S.cost;
 
   // DGSF model: Departmental Gross = GSF × deptGrossPct, MEP/Shell = remainder
+  // (legacy display fields, kept for the DGSF strip).
   var dgsf = Math.round(totalGSF * S.deptGrossPct);
   var mepGSF = totalGSF - dgsf;
-  // NASF-to-DGSF inflation factor (NASF → GSF for each program type)
-  var dgsfFactor = totalNASF > 0 ? dgsf / totalNASF : 1;
+  // v0.7.7: fit-out gross factor is now aligned with the Cost Detail table and
+  // the Floor Stacking tab — DGSF = NASF + pro-rata circulation, where the
+  // circulation % comes from the Floor Stacking sliders. This keeps the Cost
+  // Summary / scenarios / charts in lockstep with the Cost Detail breakdown
+  // (previously they diverged ~8% because calcCost used deptGrossPct here).
+  var _fsC        = S.floorStacking || {};
+  var _circPctC   = (_fsC.circulation_pct_global != null) ? _fsC.circulation_pct_global : 0.18;
+  var _bsPctC     = (_fsC.building_support_pct_global != null) ? _fsC.building_support_pct_global : 0.05;
+  var _nasfShareC = Math.max(0.01, 1 - _circPctC - _bsPctC);
+  var dgsfFactor  = 1 + _circPctC / _nasfShareC;
 
   // ── CORE & SHELL (applied to total GSF) ──
   var totalCoreShell = Math.round(totalGSF * cs.coreShellRate);
@@ -907,6 +916,19 @@ function calcCost(totalGSF, totalNASF, piNASF, coreNASF, commNASF, eventNASF, su
     var costCat = dgsfCat * rate;
     progLines.push({ cat:rc.label, nasf:nasf, dgsf:dgsfCat, rate:rate, cost:costCat, group:'other', mapType:'cost', mapKey:rc.rateKey });
   });
+
+  // v0.7.8: UNALLOCATED / SHELL — any NASF capacity not yet assigned to a
+  // program category still costs money to build out (warm shell). Add it as a
+  // fit-out line at an editable rate so the Cost Detail accounts for 100% of
+  // the building's NASF, not just the programmed portion.
+  var _progNASFsum = 0;
+  progLines.forEach(function(p){ _progNASFsum += (p.nasf || 0); });
+  var unallocNASF = Math.max(0, Math.round(totalNASF - _progNASFsum));
+  if (unallocNASF > 0) {
+    var _uRate = (cs.unassignedRate != null) ? cs.unassignedRate : 200;
+    var _uDgsf = Math.round(unallocNASF * dgsfFactor);
+    progLines.push({ cat:'Unallocated / Shell', nasf:unallocNASF, dgsf:_uDgsf, rate:_uRate, cost:_uDgsf * _uRate, group:'unalloc', mapType:'cost', mapKey:'unassignedRate' });
+  }
 
   var totalFitout = 0;
   progLines.forEach(function(p) { totalFitout += p.cost; });
@@ -3217,9 +3239,10 @@ function renderCost(d) {
     + '</tr>';
 
   // ---- 2. FITOUT (per-program, against DGSF) -----------------------
-  var resLines   = cs.progLines.filter(function(p){return p.group==='research'});
-  var coreLines  = cs.progLines.filter(function(p){return p.group==='core'});
-  var otherLines = cs.progLines.filter(function(p){return p.group==='other'});
+  var resLines    = cs.progLines.filter(function(p){return p.group==='research'});
+  var coreLines   = cs.progLines.filter(function(p){return p.group==='core'});
+  var otherLines  = cs.progLines.filter(function(p){return p.group==='other'});
+  var unallocLines= cs.progLines.filter(function(p){return p.group==='unalloc'});
   h += _section('Program Fitout (DGSF × $/DGSF)');
 
   if (resLines.length > 0) {
@@ -3236,6 +3259,10 @@ function renderCost(d) {
     h += '<tr><td colspan="9" style="'+labelStyle+';font-weight:700;color:#5A5F66;font-size:.74rem;text-transform:uppercase;letter-spacing:.05em;padding:6px 10px">Non-Research Program</td></tr>';
     otherLines.forEach(function(p){ h += _row(p); });
     h += _subtotal('Subtotal: Non-Research Program', otherLines);
+  }
+  if (unallocLines.length > 0) {
+    h += '<tr><td colspan="9" style="'+labelStyle+';font-weight:700;color:#5A5F66;font-size:.74rem;text-transform:uppercase;letter-spacing:.05em;padding:6px 10px">Unallocated — Warm Shell</td></tr>';
+    unallocLines.forEach(function(p){ h += _row(p); });
   }
 
   // Fitout total — primary row, blush highlight
@@ -3336,6 +3363,10 @@ function renderCost(d) {
     var v = (S.cost[s.key] != null) ? S.cost[s.key] : 425;
     h += _rateRow(s.label, v, "setCostInt('"+s.key+"',this.value)", { indent:true, mapType:'cost', mapKey:s.key });
   });
+
+  // Unallocated NASF (warm shell) — applied to any capacity not yet programmed.
+  h += _rateSection('Unallocated / Shell');
+  h += _rateRow('Unallocated (warm shell)', (S.cost.unassignedRate!=null?S.cost.unassignedRate:200), "setCostInt('unassignedRate',this.value)", { indent:true });
 
   h += '</tbody></table></div>';
   // Fitout Total — the one true totaling line for this card, blush highlight.
@@ -6725,10 +6756,10 @@ if (typeof buildPresetScenarios === 'function') {
     // (0, 1, 2a, 2b, 2c, 3a). If the saved state predates this revision, drop
     // whatever scenarios were baked in and rebuild from the presets below;
     // once rebuilt (flag set), preserve whatever is there.
-    if (S._scenRev !== '2026-06-deck') {
+    if (S._scenRev !== '2026-06-deck-v3') {
       S.scenarios = [];
       S.activeScenario = -1;
-      S._scenRev = '2026-06-deck';
+      S._scenRev = '2026-06-deck-v3';
     } else if (S.scenarios && S.scenarios.length > 0) {
       return;
     }
@@ -6910,6 +6941,25 @@ window.BENCH_RATES = [
   if (c.projectContingencyPct      == null) c.projectContingencyPct      = 0.05;
   if (c.permitsPct                 == null) c.permitsPct                 = 0.02;
   if (c.pmFeePct                   == null) c.pmFeePct                   = 0.01;
+  if (c.unassignedRate             == null) c.unassignedRate             = 200;  // warm-shell $/SF for unallocated NASF
+
+  // v0.7.7: default benchmark mapping per line. This is what the Cost Detail
+  // dropdown shows when a line's $/SF matches a benchmark — so a $646 Optics
+  // line resolves to "Optics — Lower Intensity" instead of the first $646
+  // entry (BioE). Only fills entries that aren't already set, so a user's
+  // explicit dropdown choice is never overwritten.
+  c.benchMap = c.benchMap || {};
+  var _defBench = {
+    'type:wetbio':'wet_bioe', 'type:wetchem':'wet_chem', 'type:drywkshp':'dry_large',
+    'type:comp':'computational', 'type:optics':'optics_int', 'type:optnano':'optics_nano',
+    'direct:coreShellRate':'core_shell', 'direct:siteRate':'site',
+    'cost:communityRate':'community', 'cost:collaborationRate':'community',
+    'cost:eventRate':'event', 'cost:classroomRate':'office', 'cost:teachingLabRate':'wet_bioe',
+    'cost:learningSupportRate':'support', 'cost:officeEnclosedRate':'office',
+    'cost:officeOpenRate':'office', 'cost:officeSupportRate':'support', 'cost:supportRate':'support'
+  };
+  Object.keys(_defBench).forEach(function(k){ if (c.benchMap[k] == null) c.benchMap[k] = _defBench[k]; });
+  (S.coreItems || []).forEach(function(ci){ var k = 'core:'+ci.name; if (c.benchMap[k] == null) c.benchMap[k] = 'adv_imaging'; });
 })();
 
 // ============================================================
