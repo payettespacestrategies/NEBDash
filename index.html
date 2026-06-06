@@ -809,9 +809,19 @@ function C() {
     });
   });
 
-  // Basement capacity check: lab allocation + cores all need to fit
-  // (cores are assumed basement-located via existing coreFloorSplit default {basement:1, ground:0, research:0})
-  var basementCoreNASF = Math.round(coreNASF * (S.coreFloorSplit ? S.coreFloorSplit.basement : 1));
+  // v0.8.7: shared facilities are now placed by each item's OWN floor selection
+  // (Shared Facilities card), not the global coreFloorSplit %. coreByFloor maps
+  // floor token -> NASF; legacy items without a floor default to 'basement'.
+  // 'research'/'upper'/'all' tokens spread evenly across research floors.
+  var coreByFloor = { basement:0, ground:0, penthouse:0, _spread:0 };
+  S.coreItems.forEach(function(c){
+    if (!c.on) return;
+    var fl = String(c.floor || 'basement').toLowerCase();
+    if (fl === 'research' || fl === 'upper' || fl === 'all') { coreByFloor._spread += (c.nasf || 0); }
+    else { coreByFloor[fl] = (coreByFloor[fl] || 0) + (c.nasf || 0); }
+  });
+  // Basement capacity check: lab allocation + basement-located cores must fit.
+  var basementCoreNASF = Math.round(coreByFloor.basement || 0);
   var basementUsed = basementLabNASF + basementCoreNASF;
   var basementCapacity = basementNASF;  // alias for clarity
   var basementSurplus = basementCapacity - basementUsed;
@@ -831,7 +841,7 @@ function C() {
     totalGSF:totalGSF, totalNASF:totalNASF, overallEff:overallEff,
     researchFloors:researchFloors, researchFloorNASF:researchFloorNASF,
     gfNASF:gfNASF, basementNASF:basementNASF, penthouseNASF:penthouseNASF, basementResearchNASF:basementResearchNASF,
-    basementLabNASF:basementLabNASF, basementCoreNASF:basementCoreNASF,
+    basementLabNASF:basementLabNASF, basementCoreNASF:basementCoreNASF, coreByFloor:coreByFloor,
     basementUsed:basementUsed, basementCapacity:basementCapacity, basementSurplus:basementSurplus,
     basementByType:basementByType,
     basementProgramNASF:basementProgramNASF, basementProgramByCat:basementProgramByCat,
@@ -992,6 +1002,25 @@ function calcCost(totalGSF, totalNASF, piNASF, coreNASF, commNASF, eventNASF, su
   var totalFitout = 0;
   progLines.forEach(function(p) { totalFitout += p.cost; });
 
+  // v0.8.9: cleanroom is a shared amenity (varies 0/4K/10K across scenarios), not
+  // a per-researcher cost. Track its fit-out $ separately so the scenario
+  // efficiency / premium charts can exclude it for a fair per-research comparison.
+  var cleanroomFitout = 0, cleanroomNASF = 0;
+  function _isClean(it){ return it && it.on && /clean\s*room/i.test(it.name || ''); }
+  (S.gfProgram || []).concat(S.upperCommunity || []).forEach(function(it){
+    if (!_isClean(it)) return;
+    var nasf = (it.nasf || 0) * _itemMultC(it);
+    var rcm = nonResCats.filter(function(x){ return x.id === it.cat; })[0];
+    var rk = rcm ? rcm.rateKey : 'eventRate';
+    var rt = _lineRate('cost', rk, (cs[rk] != null) ? cs[rk] : 425);
+    cleanroomNASF += nasf; cleanroomFitout += Math.round(nasf * dgsfFactor) * rt;
+  });
+  (S.coreItems || []).forEach(function(c){
+    if (!_isClean(c)) return;
+    var rt = _lineRate('core', c.name, (cs.coreRates && cs.coreRates[c.name]) || 538);
+    cleanroomNASF += (c.nasf || 0); cleanroomFitout += Math.round((c.nasf || 0) * dgsfFactor) * rt;
+  });
+
   // ── BASE CONSTRUCTION (Q4 2025) — Construction + Gen Conditions ──
   var constructionCost = totalCoreShell + totalFitout + totalSite;
 
@@ -1057,7 +1086,7 @@ function calcCost(totalGSF, totalNASF, piNASF, coreNASF, commNASF, eventNASF, su
     totalShell:totalCoreShell, // backward compat alias
     progLines:progLines, totalFitout:totalFitout,
     openLabNASF:openLabNASF, labSupportNASF:labSupportNASF, deskNASF:deskNASF, officeNASF:officeNASF,
-    constructionCost:constructionCost,
+    constructionCost:constructionCost, cleanroomFitout:cleanroomFitout, cleanroomNASF:cleanroomNASF,
     designContingency:designContingency, constructionContingency:constructionContingency,
     preEscalation:preEscalation,
     escalationFactor:escalationFactor, yearsToMid:yearsToMid, escalationCost:escalationCost,
@@ -2357,11 +2386,15 @@ function renderStacking(d) {
   // legend below speak for themselves.
 
   // Shared floor split from Tab 4 settings
-  var cs = S.coreFloorSplit;
-  var bsmtCoreNASF = Math.round(d.coreNASF * cs.basement);
-  var gfCoreNASF = Math.round(d.coreNASF * cs.ground);
-  var resCoreNASF = d.coreNASF - bsmtCoreNASF - gfCoreNASF;
-  var corePerFloor = d.researchFloors > 0 ? Math.round(resCoreNASF / d.researchFloors) : 0;
+  // v0.8.7: shared facilities are placed by each item's OWN floor (coreByFloor
+  // from the Shared Facilities card), not the global coreFloorSplit %. Items on
+  // 'research'/'upper' spread evenly across the research floors.
+  var _cbf = d.coreByFloor || {};
+  var _coreSpreadPF = d.researchFloors > 0 ? Math.round((_cbf._spread||0) / d.researchFloors) : 0;
+  function _coreOnResFloor(fk){ return Math.round(_cbf[String(fk).toLowerCase()] || 0) + _coreSpreadPF; }
+  var bsmtCoreNASF = Math.round(_cbf.basement || 0);
+  var gfCoreNASF = Math.round(_cbf.ground || 0);
+  var phCoreNASF = Math.round(_cbf.penthouse || 0);
 
   // Per-floor PI assignment + per-floor lab/office NASF
   var piAlloc = getPIFloorAllocation();
@@ -2377,7 +2410,7 @@ function renderStacking(d) {
     var kc = String(fc);
     var commOnF = d.upperCommunityByFloor[kc] || 0;
     var evOnF   = d.upperEventByFloor[kc] || 0;
-    var asgn = (floorBreak[kc].lab) + (floorBreak[kc].office) + corePerFloor + commOnF + evOnF;
+    var asgn = (floorBreak[kc].lab) + (floorBreak[kc].office) + _coreOnResFloor(kc) + commOnF + evOnF;
     upperDeficit = Math.max(upperDeficit, asgn - d.researchFloorNASF);
   }
 
@@ -2413,6 +2446,7 @@ function renderStacking(d) {
     });
   }
   _addPHItems(S.gfProgram); _addPHItems(S.upperCommunity);
+  if (phCoreNASF > 0) { phSegs.push({ label:'Shared Facilities', nasf:phCoreNASF, color:'var(--clrCore)' }); phAssigned += phCoreNASF; }
   if (phNASF > 0 || phAssigned > 0) {
     // v0.8.0: when program is explicitly placed on the penthouse but its
     // efficiency slider is 0 (no modeled NASF capacity), treat the assigned
@@ -2438,7 +2472,7 @@ function renderStacking(d) {
     var fPIs = floorBreak[fk].pis; // upper PIs assigned to this floor
     var fComm = d.upperCommunityByFloor[fk] || 0;
     var fEvent = d.upperEventByFloor[fk] || 0;
-    var fAssigned = fLab + fOff + corePerFloor + fComm + fEvent;
+    var fAssigned = fLab + fOff + _coreOnResFloor(fk) + fComm + fEvent;
     var fDeficit = Math.max(0, fAssigned - d.researchFloorNASF);
     var unassigned = Math.max(0, d.researchFloorNASF - fAssigned);
     // v0.5.50: collapse basement-displaced desk + office into one segment.
@@ -2465,7 +2499,7 @@ function renderStacking(d) {
         color: FICM.officeA
       });
     }
-    segments.push({ label:'Shared Facilities', nasf:corePerFloor, color:'var(--clrCore)' });
+    segments.push({ label:'Shared Facilities', nasf:_coreOnResFloor(fk), color:'var(--clrCore)' });
     // v0.5.47: split the upper-floor non-event program by display category
     // upstream (Collab vs. Community vs. Office vs. Classroom/Teach Lab vs.
     // Bldg Sup) so the floor bar shows the correct label per item. Previously
@@ -2693,12 +2727,12 @@ function renderStacking(d) {
     var fPIs = floorBreak[fk].pis;
     var fComm = d.upperCommunityByFloor[fk] || 0;
     var fEv = d.upperEventByFloor[fk] || 0;
-    var fAssigned = fLab + fOff + corePerFloor + fComm + fEv;
+    var fAssigned = fLab + fOff + _coreOnResFloor(fk) + fComm + fEv;
     var fDeficit = Math.max(0, fAssigned - d.researchFloorNASF);
     var floorUnassigned = Math.max(0, d.researchFloorNASF - fAssigned);
     var overStyle = fDeficit > 0 ? ' style="background:#FFEBEE"' : '';
     var pisLabel = (fPIs % 1 === 0) ? fPIs.toFixed(0) : fPIs.toFixed(1);
-    h += '<tr'+overStyle+'><td style="font-weight:700">Floor '+f+(fDeficit>0?' <span style="color:#E53935">\u26a0</span>':'')+'</td><td style="font-weight:700;color:var(--clrResearch)">'+pisLabel+'</td><td>'+F(S.aboveGradeGSF)+'</td><td style="color:var(--teal)">'+F(Math.round(S.aboveGradeGSF*S.deptGrossPct))+'</td><td>'+F(d.researchFloorNASF)+'</td><td>'+F(fLab)+'</td><td>'+F(fOff)+'</td><td>'+F(corePerFloor)+'</td><td>'+F(fComm)+'</td><td>'+(fEv>0?F(fEv):'\u2014')+'</td><td>'+F(floorUnassigned)+'</td></tr>';
+    h += '<tr'+overStyle+'><td style="font-weight:700">Floor '+f+(fDeficit>0?' <span style="color:#E53935">\u26a0</span>':'')+'</td><td style="font-weight:700;color:var(--clrResearch)">'+pisLabel+'</td><td>'+F(S.aboveGradeGSF)+'</td><td style="color:var(--teal)">'+F(Math.round(S.aboveGradeGSF*S.deptGrossPct))+'</td><td>'+F(d.researchFloorNASF)+'</td><td>'+F(fLab)+'</td><td>'+F(fOff)+'</td><td>'+F(_coreOnResFloor(fk))+'</td><td>'+F(fComm)+'</td><td>'+(fEv>0?F(fEv):'\u2014')+'</td><td>'+F(floorUnassigned)+'</td></tr>';
   }
   var gfOverStyle = gfDeficit > 0 ? ' style="background:#FFEBEE"' : '';
   h += '<tr'+gfOverStyle+'><td style="font-weight:700">Floor 1 (Ground)'+(gfDeficit>0?' <span style="color:#E53935">\u26a0</span>':'')+'</td><td style="color:var(--mut)">\u2014</td><td>'+F(S.aboveGradeGSF)+'</td><td style="color:var(--teal)">'+F(Math.round(S.aboveGradeGSF*S.deptGrossPct))+'</td><td>'+F(d.gfNASF)+'</td><td>\u2014</td><td>\u2014</td><td>'+F(gfCoreNASF)+'</td><td>'+F(d.gfCommunity)+'</td><td>'+F(d.eventNASF)+'</td><td>'+F(gfRemaining)+'</td></tr>';
@@ -3567,21 +3601,46 @@ function renderCost(d) {
 // scenario's data on the fly from its own state against the CURRENT menu/inputs,
 // restoring the working state afterward. This makes the chart + scenario cards
 // track menu edits even with no scenario loaded.
+// v0.8.7: recompute each scenario's cost/area snapshot. The scenario the user
+// has LOADED (S._loadedScen) IS the live working state, so its snapshot is taken
+// from the current S (and persisted) — this is what makes edits to a loaded
+// scenario (e.g. adding a Cleanroom, changing a $/SF) show up live in the
+// comparison charts and survive a scenario switch / export.
 function _recomputeScenarioData() {
   var scs = S.scenarios || [];
   if (!scs.length) return;
-  // Save the live working state (excluding the heavy scenarios array).
+  var L = (S._loadedScen != null && S._loadedScen >= 0) ? S._loadedScen : -1;
   var saved = {};
   Object.keys(S).forEach(function(k){ if (k !== 'scenarios') saved[k] = JSON.parse(JSON.stringify(S[k])); });
+  function _restoreSaved(){ Object.keys(saved).forEach(function(k){ if (k!=='scenarios'&&k!=='activeScenario') S[k]=JSON.parse(JSON.stringify(saved[k])); }); }
   try {
-    scs.forEach(function(sc){
-      if (!sc || !sc.state) return;
-      Object.keys(sc.state).forEach(function(k){ if (k!=='scenarios' && k!=='activeScenario') S[k] = JSON.parse(JSON.stringify(sc.state[k])); });
-      sc.data = JSON.parse(JSON.stringify(C()));
+    scs.forEach(function(sc, idx){
+      if (!sc) return;
+      if (idx === L) {
+        // Loaded scenario = live working state: persist state + compute live data.
+        _restoreSaved();
+        var st = {};
+        Object.keys(S).forEach(function(k){ if (k!=='scenarios'&&k!=='activeScenario'&&k!=='_loadedScen') st[k] = JSON.parse(JSON.stringify(S[k])); });
+        sc.state = st;
+        sc.data = JSON.parse(JSON.stringify(C()));
+      } else if (sc.state) {
+        Object.keys(sc.state).forEach(function(k){ if (k!=='scenarios'&&k!=='activeScenario'&&k!=='_loadedScen') S[k] = JSON.parse(JSON.stringify(sc.state[k])); });
+        sc.data = JSON.parse(JSON.stringify(C()));
+      }
     });
   } finally {
-    Object.keys(saved).forEach(function(k){ if (k!=='scenarios' && k!=='activeScenario') S[k] = saved[k]; });
+    _restoreSaved();
   }
+}
+// Persist the live working state back into the scenario currently loaded, so
+// edits survive a scenario switch and an export.
+function _syncLoadedScenario() {
+  var L = S._loadedScen;
+  if (L == null || L < 0 || !S.scenarios || !S.scenarios[L]) return;
+  var st = {};
+  Object.keys(S).forEach(function(k){ if (k!=='scenarios'&&k!=='activeScenario'&&k!=='_loadedScen') st[k] = JSON.parse(JSON.stringify(S[k])); });
+  S.scenarios[L].state = st;
+  S.scenarios[L].data = JSON.parse(JSON.stringify(C()));
 }
 // v0.8.5: simplified scenario comparison — two half-width cards under the Cost
 // Summary. (1) total project cost per scenario, one-color bars, big $XXXM labels,
@@ -3599,19 +3658,17 @@ function _angledWrapLabel(name, x, y) {
   s += '</text>';
   return s;
 }
-// Which scenario is selected for the detail bar (click a top chart to change).
+// The detailed scenario below = the loaded/active one (clicking a chart loads it).
 function _selScen() {
-  var i = window._scenSel;
-  if (i == null) i = (S.activeScenario != null && S.activeScenario >= 0) ? S.activeScenario : 0;
+  var i = (S.activeScenario != null && S.activeScenario >= 0) ? S.activeScenario : 0;
   var n = (S.scenarios || []).length;
   if (i < 0) i = 0; if (i >= n) i = n - 1;
   return i;
 }
-function selectScenario(i) { window._scenSel = parseInt(i, 10); render(); }
 function _buildScenarioTotalCostChart() {
   var scs = S.scenarios || []; if (!scs.length) return '';
   var sel = _selScen();
-  var HARD = '#1B3A5C', SOFT = '#C56F26';
+  var HARD = '#024A6A', SOFT = '#0098F0';
   var data = scs.map(function(sc){
     var cc = (sc.data && sc.data.cost) ? sc.data.cost : {};
     var hard = cc.hardCost || 0;
@@ -3666,7 +3723,7 @@ function _buildScenarioMakeupChart() {
     var v = vals(cc), hard = hards[i], on = (i===sel);
     var nm = sc.name.replace(/\s*—\s*/,' ');
     h += '<div style="cursor:pointer;'+(on?'background:#EEF2F7;border-radius:6px;padding:3px 5px;margin:-3px -5px':'')+'" onclick="selectScenario('+i+')">';
-    h += '<div style="display:flex;justify-content:space-between;font-size:.72rem;font-weight:700;color:var(--navy);margin-bottom:2px"><span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:72%">'+nm+'</span><span style="color:var(--mut);font-weight:600">'+FMM(hard)+' hard</span></div>';
+    h += '<div style="display:flex;justify-content:space-between;font-size:.72rem;font-weight:700;color:var(--navy);margin-bottom:2px"><span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:72%">'+nm+'</span><span style="color:var(--mut);font-weight:600">'+FMM(hard)+'</span></div>';
     h += '<div style="width:'+(hard/maxHard*100).toFixed(2)+'%;min-width:3px;display:flex;height:20px;border-radius:4px;overflow:hidden;border:1px solid var(--bdr)">';
     SEG.forEach(function(s){ var val=v[s.key]||0; if(val<=0) return; var pct=hard>0?val/hard*100:0; h += '<div title="'+s.label+': '+FMM(val)+'" style="width:'+pct.toFixed(3)+'%;background:'+s.color+'"></div>'; });
     h += '</div></div>';
@@ -3685,23 +3742,119 @@ function _buildSelectedScenarioConstructionBar() {
   var cc = sc.data.cost || {};
   var bm = (sc.state && sc.state.cost ? sc.state.cost.benchMap : null) || (S.cost && S.cost.benchMap) || {};
   function lineCatBM(mapType, key){ var bk = bm[mapType+':'+key]; var e=(window.BENCH_RATES||[]).filter(function(x){return x.key===bk})[0]; return (e&&e.cat)||'research'; }
+  // v0.8.8: JUST the program fit-out (progLines) — the building-wide Core & Shell
+  // and Site are excluded so the program mix isn't swamped by the $/GSF shell.
   var byCat = {};
   (cc.progLines || []).forEach(function(p){ var cat=lineCatBM(p.mapType,p.mapKey); byCat[cat]=(byCat[cat]||0)+(p.cost||0); });
-  var a=lineCatBM('direct','coreShellRate'); byCat[a]=(byCat[a]||0)+(cc.totalCoreShell||0);
-  var b=lineCatBM('direct','siteRate'); byCat[b]=(byCat[b]||0)+(cc.totalSite||0);
   var cats = (window.RATE_CATS || []); var total=0; cats.forEach(function(c){ total += byCat[c.id]||0; });
   if (total <= 0) return '';
   var nm = sc.name.replace(/\s*—\s*/,' ');
-  var h = '<div class="card" style="margin:0 0 18px"><div class="card-title">Construction Cost by FICM Category — '+nm+'</div>';
-  h += '<div class="card-sub">Fit-out + core &amp; shell + site for the <strong>selected</strong> scenario, grouped by the Category set on each Fitout Rate Menu entry. Click a scenario in the charts above to change this.</div>';
+  var h = '<div class="card" style="margin:0 0 18px"><div class="card-title">Cost Detail — '+nm+'</div>';
+  h += '<div class="card-sub">Program <strong>fit-out</strong> for the selected scenario, grouped by the Category set on each Fitout Rate Menu entry (excludes building-wide core &amp; shell + site). Click a scenario in the charts above to change this.</div>';
   h += '<div style="display:flex;height:34px;border-radius:8px;overflow:hidden;border:1px solid var(--bdr)">';
   cats.forEach(function(c){ var v=byCat[c.id]||0; if(v<=0)return; var pct=v/total*100; h += '<div title="'+c.label+': '+FMM(v)+' ('+pct.toFixed(0)+'%)" style="width:'+pct.toFixed(2)+'%;background:'+c.color+'"></div>'; });
   h += '</div>';
   h += '<div style="display:flex;flex-wrap:wrap;gap:8px 18px;margin-top:12px">';
   cats.forEach(function(c){ var v=byCat[c.id]||0; if(v<=0)return; h += '<div style="display:flex;align-items:center;gap:6px"><span style="width:11px;height:11px;border-radius:3px;background:'+c.color+'"></span><span style="font-size:.85rem;color:var(--navy);font-weight:600">'+c.label+'</span><span style="font-family:\'IBM Plex Mono\',monospace;font-size:.85rem;color:var(--navy)">'+FMM(v)+'</span><span style="font-size:.76rem;color:var(--mut)">'+(v/total*100).toFixed(0)+'%</span></div>'; });
   h += '</div>';
-  h += '<div style="text-align:right;margin-top:8px;font-family:\'IBM Plex Mono\',monospace;font-weight:700;color:var(--navy)">Construction (fit-out + C&amp;S + site): '+FMM(total)+'</div>';
+  h += '<div style="text-align:right;margin-top:8px;font-family:\'IBM Plex Mono\',monospace;font-weight:700;color:var(--navy)">Program fit-out: '+FMM(total)+'</div>';
   h += '</div>';
+  return h;
+}
+// v0.8.8: Hard/Soft project breakdown table for the SELECTED scenario (updates
+// when a bar/row is clicked in the charts above), styled like the budget table.
+function _buildSelectedScenarioBreakdownTable() {
+  var scs = S.scenarios || []; if (!scs.length) return '';
+  var sel = _selScen(), sc = scs[sel]; if (!sc || !sc.data) return '';
+  var cc = sc.data.cost || {}; var proj = cc.projectCost || 1;
+  function soft(k){ var x=(cc.softLines||[]).filter(function(s){return s.key===k})[0]; return x?x.amount:0; }
+  function pc(v){ return Math.round(v/proj*100)+'%'; }
+  function money(v){ return '$'+F(Math.round(v||0)); }
+  var nm = sc.name.replace(/\s*—\s*/,' ');
+  var hardRows = [['Construction + Gen. Cond.', cc.constructionCost],['Design Contingency', cc.designContingency],['Construction Contingency', cc.constructionContingency],['Escalation', cc.escalationCost],['Tariff', cc.tariffCost||0]];
+  var softRows = [['Professional Services', soft('professionalServices')],['Owner Work', soft('ownerWork')],['Project Contingency', soft('projectContingency')],['Permits', soft('permits')],['Project Management Fee', soft('pmFee')]];
+  var th = 'padding:7px 12px;font-family:\'Sora\',sans-serif;font-weight:800;font-size:.72rem;text-transform:uppercase;letter-spacing:.04em;color:var(--navy);background:#F0EAE3;border-bottom:2px solid #1B3A5C';
+  var num = 'font-family:\'IBM Plex Mono\',monospace;text-align:right';
+  var h = '<div class="card" style="margin:0 0 18px;max-width:620px"><div class="card-title">Project Breakdown — '+nm+'</div>';
+  h += '<div class="card-sub">Hard + soft cost buildup as a share of total project cost for the selected scenario.</div>';
+  h += '<table class="comp" style="width:100%;border-collapse:collapse">';
+  h += '<thead><tr><th style="'+th+';text-align:left">Project Breakdown</th><th style="'+th+';text-align:right">% of Project</th><th style="'+th+';text-align:right">Cost</th></tr></thead><tbody>';
+  function section(label, pctv, amt){ return '<tr style="border-top:2px solid #1B3A5C"><td style="padding:7px 12px;font-weight:800;color:var(--navy)">'+label+'</td><td style="'+num+';padding:7px 12px;font-weight:800;color:var(--navy)">'+pctv+'</td><td style="'+num+';padding:7px 12px;font-weight:800;color:var(--navy)">'+amt+'</td></tr>'; }
+  function row(label, v){ return '<tr><td style="padding:5px 12px 5px 22px;color:#3A4046;border-bottom:1px solid var(--bdr)">'+label+'</td><td style="'+num+';padding:5px 12px;color:#5A5F66;border-bottom:1px solid var(--bdr)">'+pc(v)+'</td><td style="'+num+';padding:5px 12px;color:var(--navy);border-bottom:1px solid var(--bdr)">'+money(v)+'</td></tr>'; }
+  h += section('Hard Costs', pc(cc.hardCost), money(cc.hardCost));
+  hardRows.forEach(function(r){ h += row(r[0], r[1]); });
+  h += '<tr><td colspan="3" style="height:8px"></td></tr>';
+  h += section('Soft Costs', pc(cc.softCostTotal), money(cc.softCostTotal));
+  softRows.forEach(function(r){ h += row(r[0], r[1]); });
+  h += '<tr style="border-top:3px solid #1B3A5C;background:#F4F0EC"><td style="padding:8px 12px;font-weight:900;color:var(--navy)">Total Project Cost</td><td style="'+num+';padding:8px 12px;font-weight:900;color:var(--navy)">100%</td><td style="'+num+';padding:8px 12px;font-weight:900;color:var(--navy)">'+money(proj)+'</td></tr>';
+  h += '</tbody></table></div>';
+  return h;
+}
+// Project cost with the cleanroom amenity removed (its fit-out, less markups,
+// drops out of the total proportionally) — used so the efficiency / premium
+// comparisons aren't skewed by a shared extra that doesn't scale with PIs.
+function _projExCleanroom(cc) {
+  if (!cc || !(cc.constructionCost > 0)) return (cc && cc.projectCost) || 0;
+  return (cc.projectCost || 0) * (1 - (cc.cleanroomFitout || 0) / cc.constructionCost);
+}
+// v0.8.9: cost EFFICIENCY — $ of project cost (ex-cleanroom) per research NSF
+// (piNASF+coreNASF). Lower = better value. Best=green, worst=coral.
+function _buildScenarioEfficiencyChart() {
+  var scs = S.scenarios || []; if (!scs.length) return '';
+  var sel = _selScen();
+  var data = scs.map(function(sc){
+    var cc = (sc.data && sc.data.cost) ? sc.data.cost : {}, dd = sc.data || {};
+    var resNSF = (dd.piNASF || 0) + (dd.coreNASF || 0);
+    return { name:sc.name, v: resNSF > 0 ? _projExCleanroom(cc) / resNSF : 0 };
+  });
+  var vals = data.map(function(d){ return d.v; });
+  var maxV = Math.max.apply(null, vals), minV = Math.min.apply(null, vals);
+  var yMin = Math.max(0, Math.floor(minV/250)*250 - 250), yMax = Math.ceil(maxV/250)*250;
+  if (yMax <= yMin) yMax = yMin + 1000;
+  var n = data.length, W = 560, padL = 56, padR = 14, padT = 40, padB = 108, chartH = 240;
+  var innerW = W - padL - padR, slot = innerW / n, barW = Math.min(56, slot*0.62);
+  var h = '<div class="card" style="margin:0"><div class="card-title">Cost Efficiency ($/Research NSF)</div>';
+  h += '<div class="card-sub">Project cost (<strong>excluding the cleanroom</strong>) per NSF of research (labs + shared facilities). <strong>Lower = better value</strong>: <span style="color:#639922;font-weight:700">best</span> spends least per researcher; <span style="color:#D85A30;font-weight:700">worst</span> spends most. Y-axis zoomed. Click a bar to load it.</div>';
+  h += '<div style="overflow-x:auto"><svg viewBox="0 0 '+W+' '+(chartH+padT+padB)+'" style="width:100%;font-family:\'Roboto\',\'IBM Plex Mono\',monospace">';
+  for (var g=0; g<=4; g++){ var yy=padT+chartH-chartH*g/4, vv=yMin+(yMax-yMin)*g/4;
+    h += '<line x1="'+padL+'" y1="'+yy+'" x2="'+(W-padR)+'" y2="'+yy+'" stroke="var(--bdr)" stroke-dasharray="3,3"/>';
+    h += '<text x="'+(padL-7)+'" y="'+(yy+3)+'" text-anchor="end" font-size="9" fill="var(--mut)">$'+F(Math.round(vv))+'</text>'; }
+  data.forEach(function(d,i){
+    var x = padL + slot*i + slot/2;
+    var bh = (yMax>yMin) ? (d.v-yMin)/(yMax-yMin)*chartH : 0; if(bh<1)bh=1;
+    var y = padT+chartH-bh, x0 = x-barW/2;
+    var col = (d.v===minV) ? '#639922' : (d.v===maxV) ? '#D85A30' : '#378ADD';
+    var on = (i===sel);
+    h += '<g style="cursor:pointer" onclick="loadScenario('+i+')">';
+    h += '<rect x="'+x0.toFixed(1)+'" y="'+y.toFixed(1)+'" width="'+barW.toFixed(1)+'" height="'+bh.toFixed(1)+'" rx="3" fill="'+col+'"'+(on?' stroke="var(--navy)" stroke-width="2.5"':'')+'/>';
+    h += '<text x="'+x+'" y="'+(y-7)+'" text-anchor="middle" font-size="12.5" font-weight="800" fill="var(--navy)" style="font-family:\'Roboto\',sans-serif">$'+F(Math.round(d.v))+'</text>';
+    h += _angledWrapLabel(d.name, x, padT+chartH+15);
+    h += '</g>';
+  });
+  h += '</svg></div></div>';
+  return h;
+}
+// v0.8.9: PREMIUM over the cheapest (Bare Minimum) scenario — what each option
+// costs above baseline. Bar length proportional to the premium. Click loads it.
+function _buildScenarioPremiumChart() {
+  var scs = S.scenarios || []; if (!scs.length) return '';
+  var sel = _selScen();
+  var costs = scs.map(function(sc){ return (sc.data && sc.data.cost) ? _projExCleanroom(sc.data.cost) : 0; });
+  var baseline = Math.min.apply(null, costs);
+  var prem = costs.map(function(c){ return c - baseline; });
+  var maxP = Math.max.apply(null, prem) || 1;
+  var h = '<div class="card" style="margin:0"><div class="card-title">Premium Over Bare Minimum</div>';
+  h += '<div class="card-sub">Project cost (excluding the cleanroom) above the cheapest scenario ('+FMM(baseline)+' baseline) — what each option <em>buys</em> (PIs, envelope, Dean’s Suite). Click a row to load it.</div>';
+  h += '<div style="display:flex;flex-direction:column;gap:9px;margin-top:6px">';
+  scs.forEach(function(sc,i){
+    var p = prem[i], on = (i===sel);
+    var nm = sc.name.replace(/\s*—\s*/,' ');
+    h += '<div style="cursor:pointer;'+(on?'background:#EEF2F7;border-radius:6px;padding:3px 5px;margin:-3px -5px':'')+'" onclick="loadScenario('+i+')">';
+    h += '<div style="display:flex;justify-content:space-between;font-size:.72rem;font-weight:700;color:var(--navy);margin-bottom:2px"><span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:62%">'+nm+'</span><span style="color:var(--mut);font-weight:600">'+(p>0?'+'+FMM(p):'baseline')+'</span></div>';
+    h += '<div style="display:flex;align-items:center;gap:8px"><div style="flex:1;height:18px;background:var(--bg);border-radius:4px;overflow:hidden;border:1px solid var(--bdr)"><div style="width:'+(p/maxP*100).toFixed(2)+'%;height:100%;background:#185FA5"></div></div><span style="font-family:\'IBM Plex Mono\',monospace;font-size:.72rem;color:var(--navy);font-weight:700;min-width:48px;text-align:right">'+FMM(costs[i])+'</span></div>';
+    h += '</div>';
+  });
+  h += '</div></div>';
   return h;
 }
 function _buildScenarioTopCharts() {
@@ -3712,6 +3865,11 @@ function _buildScenarioTopCharts() {
   h += _buildScenarioMakeupChart();
   h += '</div>';
   h += _buildSelectedScenarioConstructionBar();
+  h += _buildSelectedScenarioBreakdownTable();
+  h += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:18px;align-items:start;margin-bottom:18px">';
+  h += _buildScenarioEfficiencyChart();
+  h += _buildScenarioPremiumChart();
+  h += '</div>';
   return h;
 }
 function renderCostScenarioCharts() {
@@ -4248,14 +4406,16 @@ function saveScenario() {
   S.activeScenario = S.scenarios.length - 1;
   render();
 }
-function selectScenario(i) { S.activeScenario = i; render(); }
+// v0.8.7: "select" a scenario = load it, so the active scenario is always the
+// live working state (one coherent concept across charts, picker, and cards).
+function selectScenario(i) { loadScenario(i); }
 function loadScenario(i) {
-  var sc = S.scenarios[i];
-  var saved = S.scenarios, active = i;
+  var sc = S.scenarios[i]; if (!sc || !sc.state) return;
+  _syncLoadedScenario();   // persist edits from the previously-loaded scenario first
   Object.keys(sc.state).forEach(function(k) {
-    if (k !== 'scenarios' && k !== 'activeScenario') S[k] = JSON.parse(JSON.stringify(sc.state[k]));
+    if (k !== 'scenarios' && k !== 'activeScenario' && k !== '_loadedScen') S[k] = JSON.parse(JSON.stringify(sc.state[k]));
   });
-  S.scenarios = saved; S.activeScenario = active; render();
+  S.activeScenario = i; S._loadedScen = i; render();
 }
 function deleteScenario(i) {
   S.scenarios.splice(i, 1);
@@ -4268,7 +4428,7 @@ function clearScenarios() { S.scenarios = []; S.activeScenario = -1; render(); }
 // load its full state, or "Working state" to keep editing without a scenario.
 function loadScenarioFromPicker(v) {
   var i = parseInt(v, 10);
-  if (isNaN(i) || i < 0) { S.activeScenario = -1; render(); return; }
+  if (isNaN(i) || i < 0) { _syncLoadedScenario(); S.activeScenario = -1; S._loadedScen = -1; render(); return; }
   loadScenario(i);   // applies the scenario's state, sets activeScenario, re-renders
 }
 function renderScenarioBar() {
@@ -4894,8 +5054,9 @@ function exportJSON() {
   // now (a) strip the redundant nested scenario snapshots so the file isn't
   // bloated, (b) use msSaveOrOpenBlob on legacy Edge, and (c) append the
   // anchor to the DOM before clicking, then revoke the object URL.
+  if (typeof _syncLoadedScenario === 'function') _syncLoadedScenario();  // capture edits to the loaded scenario
   var exportState = {};
-  Object.keys(S).forEach(function(k){ if (k !== 'scenarios') exportState[k] = S[k]; });
+  Object.keys(S).forEach(function(k){ if (k !== 'scenarios' && k !== '_loadedScen') exportState[k] = S[k]; });
   // Keep scenarios but drop the scenarios array nested inside each snapshot's
   // state (that nesting grows the file enormously and isn't needed on re-import).
   exportState.scenarios = (S.scenarios || []).map(function(sc){
@@ -9499,11 +9660,11 @@ function _skillBuildThematicFloorRows(d) {
   // Shared/Community/Event/CorePerFloor goes into "Shared / Common".
   var floorTheme = {}; // { fk: { themeId: nasf, ... }, ... }
   var floorOther = {}; // { fk: nasf }
-  var corePerFloor = 0;
-  if (d && typeof d.coreNASF === 'number') {
-    var coreSplitResearch = (S.coreFloorSplit && S.coreFloorSplit.research) || 0;
-    corePerFloor = researchFloors > 0 ? d.coreNASF * coreSplitResearch / researchFloors : 0;
-  }
+  // v0.8.7: shared facilities per floor from each item's own floor (coreByFloor),
+  // matching the Building Section. 'research'/'upper' items spread evenly.
+  var _cbfMS = (d && d.coreByFloor) || {};
+  var _coreSpreadMS = researchFloors > 0 ? ((_cbfMS._spread||0) / researchFloors) : 0;
+  function _coreFloorMS(fk){ return (_cbfMS[String(fk).toLowerCase()] || 0) + _coreSpreadMS; }
   // v0.5.53: per-theme PI count is now an INTEGER, computed using the
   // largest-remainder method per typology so the count guarantees:
   //   • Σ themes = the typology's PI count on this floor
@@ -9609,7 +9770,7 @@ function _skillBuildThematicFloorRows(d) {
     // upper-floor community + event NASF.
     var fComm = (d && d.upperCommunityByFloor && d.upperCommunityByFloor[fk]) || 0;
     var fEvent = (d && d.upperEventByFloor && d.upperEventByFloor[fk]) || 0;
-    floorOther[fk] = corePerFloor + fComm + fEvent;
+    floorOther[fk] = _coreFloorMS(fk) + fComm + fEvent;
   }
 
   // Basement themed lab NSF (open lab + lab support for basement-located PIs).
@@ -9676,7 +9837,7 @@ function _skillBuildThematicFloorRows(d) {
     var fkk = String(fNum);
     var themed = floorTheme[fkk] || {};
     var themedPIs = floorThemePIs[fkk] || {};
-    var sharedLab = corePerFloor;       // already pink Shared in Visual 1
+    var sharedLab = _coreFloorMS(fkk);   // shared facilities on this floor (per-item floor)
     var total = 0;
     themes.forEach(function(th){ total += (themed[th.id] || 0); });
     total += sharedLab;
