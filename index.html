@@ -475,7 +475,12 @@ function mergeLargeLabBreakdown(typeBreakdown) {
   typeBreakdown.forEach(function(t) {
     if (t.id === 'lglab') { largeLab = t; return; }
     merged[t.id] = { id:t.id, label:t.label, color:t.color, pis:t.pis,
-      groupNASF:t.groupNASF, totalNASF:t.totalNASF, largePIs:0 };
+      groupNASF:t.groupNASF, totalNASF:t.totalNASF, largePIs:0,
+      // v0.8.3: carry the Lab / Write-Up / Office split so the NASF Breakdown
+      // table can show the components that sum to Total NASF.
+      labNASF:    (t.groupOpenLab + t.groupLabSupport) * t.pis,
+      writeupNASF: t.groupDesk * t.pis,
+      officeNASF:  t.groupOffice * t.pis };
   });
   if (largeLab && largeLab.pis > 0) {
     Object.keys(S.largeMix).forEach(function(k) {
@@ -484,11 +489,13 @@ function mergeLargeLabBreakdown(typeBreakdown) {
       var addNASF = Math.round(largeLab.totalNASF * share);
       if (merged[k]) {
         merged[k].totalNASF += addNASF;
+        merged[k].labNASF = (merged[k].labNASF || 0) + addNASF;  // large-lab area is lab space
         merged[k].largePIs += largeLab.pis;
       } else {
         var src = S.types.find(function(x){return x.id===k});
         merged[k] = { id:k, label:src?src.label:k, color:src?src.color:'#999', pis:0,
-          groupNASF:0, totalNASF:addNASF, largePIs:largeLab.pis };
+          groupNASF:0, totalNASF:addNASF, largePIs:largeLab.pis,
+          labNASF:addNASF, writeupNASF:0, officeNASF:0 };
       }
     });
   }
@@ -882,7 +889,7 @@ function calcCost(totalGSF, totalNASF, piNASF, coreNASF, commNASF, eventNASF, su
   // lines mapped to it. The Fitout Rate Menu table edits that list directly.
   cs.benchMap = cs.benchMap || {};
   if (cs.benchMap['cost:piOfficeRate']  == null) cs.benchMap['cost:piOfficeRate']  = 'office';
-  if (cs.benchMap['cost:piWriteupRate'] == null) cs.benchMap['cost:piWriteupRate'] = 'writeup';
+  if (cs.benchMap['cost:piWriteupRate'] == null) cs.benchMap['cost:piWriteupRate'] = 'office';
   function _lineRate(mapType, key, fallback) {
     var bk = cs.benchMap[mapType + ':' + key];
     if (bk) {
@@ -991,17 +998,28 @@ function calcCost(totalGSF, totalNASF, piNASF, coreNASF, commNASF, eventNASF, su
   // ── PROJECT COST BUILDUP (Northwestern Project Budget Breakdown) ──
   // Each markup line is a % of TOTAL PROJECT COST (matching the budget table).
   // With base construction known, Total = Construction ÷ (1 − Σ markup %).
+  // v0.8.3: escalation % is COMPUTED — a base annual rate compounded over the
+  // span between the cost-basis quarter and the target (midpoint) quarter, both
+  // set on the Escalation card. Tariff is a separate premium (% of project).
+  var _baseQ2 = (cs.baseQuarter != null) ? cs.baseQuarter : 4;
+  var _tgtQ2  = (cs.escalationQuarter != null) ? cs.escalationQuarter : 4;
+  var _escYears = ((cs.escalationYear || 0) - (cs.baseYear || 0)) + (_tgtQ2 - _baseQ2) / 4;
+  if (!(_escYears >= 0)) _escYears = 0;
+  var _escRate2 = (cs.escalationRate != null) ? cs.escalationRate : 0.04;
+  var _escPctComputed = Math.pow(1 + _escRate2, _escYears) - 1;
+  cs.escalationPct = _escPctComputed;   // keep synced for display/export
   var _fr = {
     design: cs.designContingencyPct      || 0,
     constr: cs.constructionContingencyPct|| 0,
-    esc:    cs.escalationPct             || 0,
+    esc:    _escPctComputed              || 0,
+    tariff: cs.tariffPct                 || 0,
     prof:   cs.professionalServicesPct   || 0,
     owner:  cs.ownerWorkPct              || 0,
     projc:  cs.projectContingencyPct     || 0,
     permit: cs.permitsPct                || 0,
     pm:     cs.pmFeePct                  || 0
   };
-  var markupSum = _fr.design + _fr.constr + _fr.esc + _fr.prof + _fr.owner + _fr.projc + _fr.permit + _fr.pm;
+  var markupSum = _fr.design + _fr.constr + _fr.esc + _fr.tariff + _fr.prof + _fr.owner + _fr.projc + _fr.permit + _fr.pm;
   if (markupSum > 0.95) markupSum = 0.95;   // guard against divide-by-zero
   var projectCost = (1 - markupSum) > 0 ? Math.round(constructionCost / (1 - markupSum)) : constructionCost;
 
@@ -1009,7 +1027,8 @@ function calcCost(totalGSF, totalNASF, piNASF, coreNASF, commNASF, eventNASF, su
   var designContingency       = Math.round(projectCost * _fr.design);
   var constructionContingency = Math.round(projectCost * _fr.constr);
   var escalationCost          = Math.round(projectCost * _fr.esc);
-  var hardCost = constructionCost + designContingency + constructionContingency + escalationCost;
+  var tariffCost              = Math.round(projectCost * _fr.tariff);
+  var hardCost = constructionCost + designContingency + constructionContingency + escalationCost + tariffCost;
 
   // Soft-cost lines (each a % of total project).
   var softLines = [
@@ -1026,10 +1045,8 @@ function calcCost(totalGSF, totalNASF, piNASF, coreNASF, commNASF, eventNASF, su
   // Compatibility fields (escalation is now a flat % line; year fields stay on
   // S.cost for the spreadsheet export). Tariff retired (not in the breakdown).
   var preEscalation = constructionCost + designContingency + constructionContingency;
-  var baseQ = cs.baseQuarter || 4;
-  var yearsToMid = (cs.escalationYear - cs.baseYear) + (cs.escalationQuarter - baseQ) / 4;
+  var yearsToMid = _escYears;
   var escalationFactor = preEscalation > 0 ? (1 + escalationCost / preEscalation) : 1;
-  var tariffCost = 0;
   var escalatedConstruction = hardCost;
   var postTariff = hardCost;
   var softMultiplier = hardCost > 0 ? (projectCost / hardCost) : 1;   // derived (compat)
@@ -1044,6 +1061,7 @@ function calcCost(totalGSF, totalNASF, piNASF, coreNASF, commNASF, eventNASF, su
     designContingency:designContingency, constructionContingency:constructionContingency,
     preEscalation:preEscalation,
     escalationFactor:escalationFactor, yearsToMid:yearsToMid, escalationCost:escalationCost,
+    escalationPct:_escPctComputed, escalationRate:_escRate2,
     escalatedConstruction:escalatedConstruction,
     tariffCost:tariffCost, tariffPct:cs.tariffPct, postTariff:postTariff,
     hardCost:hardCost, softLines:softLines, softCostTotal:softCostTotal,
@@ -1447,14 +1465,23 @@ function renderMix(d) {
   h += '<div class="card"><div class="card-title">NASF Breakdown by Lab Type</div>';
   h += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:18px;align-items:start">';
   h += '<div>'+renderBarChart(mergedBreakdown.filter(function(t){return t.totalNASF>0}), 'totalNASF', 'label', 'color')+'</div>';
-  h += '<div><table class="comp"><tr><th>Lab Type</th><th>PIs</th><th>NASF/Group</th><th>Total NASF</th><th>% of Labs</th></tr>';
+  h += '<div><table class="comp"><tr><th>Lab Type</th><th>PIs</th><th>Lab</th><th>Write-Up</th><th>Office</th><th>Total NASF</th><th>% of Labs</th></tr>';
+  var _sumLab=0, _sumWU=0, _sumOff=0;
   mergedBreakdown.forEach(function(t){
     if (t.totalNASF === 0) return;
     var pct = d.piNASF > 0 ? Math.round(t.totalNASF / d.piNASF * 100) : 0;
     var piLabel = t.largePIs ? t.pis + ' <span style="font-weight:400;color:var(--mut)">(+' + t.largePIs + ' lg)</span>' : ''+t.pis;
-    h += '<tr><td style="font-weight:700;color:'+t.color+'">'+t.label+'</td><td>'+piLabel+'</td><td>'+F(t.groupNASF)+'</td><td style="font-weight:700">'+F(t.totalNASF)+'</td><td>'+pct+'%</td></tr>';
+    var lab=t.labNASF||0, wu=t.writeupNASF||0, off=t.officeNASF||0;
+    _sumLab+=lab; _sumWU+=wu; _sumOff+=off;
+    h += '<tr><td style="font-weight:700;color:'+t.color+'">'+t.label+'</td><td>'+piLabel+'</td>'
+       + '<td style="color:var(--clrResearch)">'+F(lab)+'</td>'
+       + '<td style="color:'+(typeof FICM!=="undefined"?FICM.officeA:"#8893a8")+'">'+F(wu)+'</td>'
+       + '<td style="color:'+(typeof FICM!=="undefined"?FICM.office:"#6E7E90")+'">'+F(off)+'</td>'
+       + '<td style="font-weight:700">'+F(t.totalNASF)+'</td><td>'+pct+'%</td></tr>';
   });
-  h += '<tr style="background:var(--navy)"><td style="color:#fff;font-weight:700" colspan="3">TOTAL RESEARCH &amp; OFFICE</td><td style="color:#fff;font-weight:700">'+F(d.piNASF)+'</td><td style="color:#fff;font-weight:700">100%</td></tr>';
+  h += '<tr style="background:var(--navy)"><td style="color:#fff;font-weight:700" colspan="2">TOTAL RESEARCH &amp; OFFICE</td>'
+     + '<td style="color:#fff;font-weight:700">'+F(_sumLab)+'</td><td style="color:#fff;font-weight:700">'+F(_sumWU)+'</td><td style="color:#fff;font-weight:700">'+F(_sumOff)+'</td>'
+     + '<td style="color:#fff;font-weight:700">'+F(d.piNASF)+'</td><td style="color:#fff;font-weight:700">100%</td></tr>';
   h += '</table></div>';
   h += '</div></div>';
 
@@ -3156,7 +3183,7 @@ function setMenuLabel(key, val) {
 function addMenuRow() {
   window.BENCH_RATES = window.BENCH_RATES || [];
   var k = 'custom_' + Date.now().toString(36);
-  window.BENCH_RATES.push({ key:k, label:'New Rate', rate:500 });
+  window.BENCH_RATES.push({ key:k, label:'New Rate', rate:500, cat:'research' });
   render();
 }
 function deleteMenuRow(key) {
@@ -3379,6 +3406,8 @@ function renderCost(d) {
 
   // ── Cost Composition (horizontal stacked bar, full width below the table) ──
   h += _skillBuildCostCompositionBar(d, cs);
+  // ── Construction Cost by FICM Category (driven by the rate-menu Category) ──
+  h += _buildCostByCategoryCard(d);
   h += '</div>'; // close .cost-top-grid
 
 
@@ -3393,26 +3422,30 @@ function renderCost(d) {
   // Both write the same S.cost rate fields, so editing a value or remapping a
   // category here updates the dropdown, the Cost Detail, and the cost math.
   h += '<div class="card"><div class="card-title">Fitout Rate Menu ($/SF)</div>';
-  h += '<div class="card-sub">A standalone, reusable list of fit-out $/SF rates &mdash; the single menu every Cost Detail dropdown pulls from. Edit a rate here and every cost line mapped to it updates. This list stays the same across all scenarios and does <strong>not</strong> auto-populate from the PI typologies or Academic Space program &mdash; add or delete rows to curate your own menu, then pick a rate per line in the Cost Detail table.</div>';
-  h += '<div style="overflow-x:auto"><table class="comp" style="background:transparent">';
+  h += '<div class="card-sub" style="margin-bottom:6px">The single menu every Cost Detail dropdown pulls from &mdash; same across all scenarios. <strong>Category</strong> colors the cost lines by FICM group (drives the Cost-by-Category chart). Add/delete rows to curate.</div>';
+  h += '<div style="overflow-x:auto"><table class="comp" style="background:transparent;font-size:.82rem">';
   h += '<thead><tr>'
-    +  '<th style="background:#F0EAE3;color:var(--navy);text-transform:uppercase;letter-spacing:.05em;font-size:.78rem;text-align:left;min-width:240px;border-bottom:1px solid #B7BCBF">Rate Name</th>'
-    +  '<th style="background:#F0EAE3;color:var(--navy);text-transform:uppercase;letter-spacing:.05em;font-size:.78rem;text-align:center;width:120px;border-bottom:1px solid #B7BCBF">$/SF</th>'
-    +  '<th style="background:#F0EAE3;width:44px;border-bottom:1px solid #B7BCBF"></th>'
+    +  '<th style="background:#F0EAE3;color:var(--navy);text-transform:uppercase;letter-spacing:.04em;font-size:.66rem;text-align:left;padding:4px 6px;border-bottom:1px solid #B7BCBF">Rate Name</th>'
+    +  '<th style="background:#F0EAE3;color:var(--navy);text-transform:uppercase;letter-spacing:.04em;font-size:.66rem;text-align:left;padding:4px 6px;border-bottom:1px solid #B7BCBF">Category</th>'
+    +  '<th style="background:#F0EAE3;color:var(--navy);text-transform:uppercase;letter-spacing:.04em;font-size:.66rem;text-align:center;width:74px;padding:4px 6px;border-bottom:1px solid #B7BCBF">$/SF</th>'
+    +  '<th style="background:#F0EAE3;width:24px;border-bottom:1px solid #B7BCBF"></th>'
     +  '</tr></thead><tbody>';
   (window.BENCH_RATES || []).forEach(function(b){
     var k = String(b.key).replace(/\\/g,'\\\\').replace(/'/g,"\\'");
     var lbl = String(b.label).replace(/"/g,'&quot;');
+    var cat = b.cat || 'research';
+    var catOpts = (window.RATE_CATS||[]).map(function(rc){ return '<option value="'+rc.id+'"'+(rc.id===cat?' selected':'')+'>'+rc.label+'</option>'; }).join('');
     h += '<tr>'
-      + '<td><input type="text" value="'+lbl+'" onchange="setMenuLabel(\''+k+'\',this.value)" style="width:94%;font-family:\'Sora\',sans-serif;font-weight:600;color:var(--navy);padding:5px 7px;border:1.5px solid var(--bdr);border-radius:6px"></td>'
-      + '<td style="text-align:center"><input type="number" min="0" step="10" value="'+b.rate+'" onchange="setMenuRate(\''+k+'\',this.value)" style="width:90px;font-family:\'IBM Plex Mono\',monospace;font-weight:700;text-align:right;color:var(--navy);padding:5px 7px;border:1.5px solid var(--bdr);border-radius:6px"></td>'
-      + '<td style="text-align:center"><button onclick="deleteMenuRow(\''+k+'\')" title="Delete this rate" style="border:none;background:transparent;color:#B0410E;font-size:1.15rem;line-height:1;cursor:pointer;font-weight:700">&times;</button></td>'
+      + '<td style="padding:2px 6px"><input type="text" value="'+lbl+'" onchange="setMenuLabel(\''+k+'\',this.value)" style="width:99%;font-family:\'Sora\',sans-serif;font-weight:600;font-size:.82rem;color:var(--navy);padding:3px 6px;border:1px solid var(--bdr);border-radius:5px"></td>'
+      + '<td style="padding:2px 6px;white-space:nowrap"><span style="display:inline-block;width:9px;height:9px;border-radius:2px;background:'+_rateCatColor(cat)+';margin-right:5px;vertical-align:middle"></span>'
+      +   '<select onchange="setMenuCategory(\''+k+'\',this.value)" style="font-size:.76rem;padding:2px 3px;border:1px solid var(--bdr);border-radius:5px;color:var(--navy)">'+catOpts+'</select></td>'
+      + '<td style="text-align:center;padding:2px 6px"><input type="number" min="0" step="10" value="'+b.rate+'" onchange="setMenuRate(\''+k+'\',this.value)" style="width:60px;font-family:\'IBM Plex Mono\',monospace;font-weight:700;font-size:.82rem;text-align:right;color:var(--navy);padding:3px 5px;border:1px solid var(--bdr);border-radius:5px"></td>'
+      + '<td style="text-align:center;padding:2px 3px"><button onclick="deleteMenuRow(\''+k+'\')" title="Delete this rate" style="border:none;background:transparent;color:#B0410E;font-size:1rem;line-height:1;cursor:pointer;font-weight:700">&times;</button></td>'
       + '</tr>';
   });
   h += '</tbody></table></div>';
-  h += '<div style="margin-top:10px"><button class="btn btn-sm btn-navy" onclick="addMenuRow()">+ Add rate</button></div>';
-  // Fitout Total — the one true totaling line for this card, blush highlight.
-  h += '<div style="background:#E8D4C6;font-family:\'Sora\',sans-serif;font-weight:800;font-size:1.0rem;padding:10px 12px;margin-top:10px;border-top:2px solid #B7BCBF;text-align:right;color:var(--navy)">Fitout Total: '+FMM(cs.totalFitout)+'</div>';
+  h += '<div style="margin-top:7px"><button class="btn btn-sm btn-navy" onclick="addMenuRow()">+ Add rate</button></div>';
+  h += '<div style="background:#E8D4C6;font-family:\'Sora\',sans-serif;font-weight:800;font-size:.92rem;padding:7px 10px;margin-top:8px;border-top:2px solid #B7BCBF;text-align:right;color:var(--navy)">Fitout Total: '+FMM(cs.totalFitout)+'</div>';
   h += '</div>';
 
   h += '</div>'; // close left col
@@ -3451,13 +3484,42 @@ function renderCost(d) {
 
   // % of total project. Helper to show each line's share of the project total.
   function _pctOfProj(amount) { return cs.projectCost > 0 ? (amount/cs.projectCost*100) : 0; }
+
+  // ── ESCALATION & TARIFF CARD (v0.8.3) ──────────────────────────────
+  var _escRateUI = (S.cost.escalationRate != null) ? S.cost.escalationRate : 0.04;
+  var _baseYrUI  = (S.cost.baseYear != null) ? S.cost.baseYear : 2025;
+  var _baseQUI   = (S.cost.baseQuarter != null) ? S.cost.baseQuarter : 4;
+  var _tgtYrUI   = (S.cost.escalationYear != null) ? S.cost.escalationYear : 2027;
+  var _tgtQUI    = (S.cost.escalationQuarter != null) ? S.cost.escalationQuarter : 4;
+  var _tariffUI  = (S.cost.tariffPct != null) ? S.cost.tariffPct : 0;
+  h += '<div class="card"><div class="card-title">Escalation &amp; Tariff</div>';
+  h += '<div class="card-sub">Escalation compounds a base annual rate from the cost-basis quarter to the construction midpoint (target). Nudge the rate or the target quarter to land on your target escalation. Tariff is a separate material premium.</div>';
+  h += '<label class="sl">Base Escalation Rate (annual)</label>';
+  h += '<div class="sl-row"><input type="range" min="0" max="0.10" step="0.001" value="'+_escRateUI+'" oninput="setCost(\'escalationRate\',this.value)"><div class="sl-val">'+(_escRateUI*100).toFixed(1)+'%/yr</div></div>';
+  h += '<div style="display:flex;gap:18px;flex-wrap:wrap">';
+  h += '<div style="flex:1;min-width:220px"><label class="sl">Cost Basis &mdash; Year</label>'
+     + '<div class="sl-row"><input type="range" min="2023" max="2030" step="1" value="'+_baseYrUI+'" oninput="setCostInt(\'baseYear\',this.value)"><div class="sl-val">'+_baseYrUI+'</div></div>'
+     + '<label class="sl">Cost Basis &mdash; Quarter</label>'
+     + '<div class="sl-row"><input type="range" min="1" max="4" step="1" value="'+_baseQUI+'" oninput="setCostInt(\'baseQuarter\',this.value)"><div class="sl-val">Q'+_baseQUI+'</div></div></div>';
+  h += '<div style="flex:1;min-width:220px"><label class="sl">Target / Midpoint &mdash; Year</label>'
+     + '<div class="sl-row"><input type="range" min="2024" max="2033" step="1" value="'+_tgtYrUI+'" oninput="setCostInt(\'escalationYear\',this.value)"><div class="sl-val">'+_tgtYrUI+'</div></div>'
+     + '<label class="sl">Target / Midpoint &mdash; Quarter</label>'
+     + '<div class="sl-row"><input type="range" min="1" max="4" step="1" value="'+_tgtQUI+'" oninput="setCostInt(\'escalationQuarter\',this.value)"><div class="sl-val">Q'+_tgtQUI+'</div></div></div>';
+  h += '</div>';
+  h += '<div class="derived" style="margin-top:12px"><div class="derived-label">Total Escalation &middot; Q'+_baseQUI+' '+_baseYrUI+' &rarr; Q'+_tgtQUI+' '+_tgtYrUI+' ('+(cs.yearsToMid||0).toFixed(2)+' yr @ '+(_escRateUI*100).toFixed(1)+'%/yr)</div><div class="derived-val">'+(cs.escalationPct*100).toFixed(1)+'% &middot; '+FMM(cs.escalationCost)+'</div></div>';
+  h += '<label class="sl" style="margin-top:14px">Tariff Premium</label>';
+  h += '<div class="sl-row"><input type="range" min="0" max="0.06" step="0.0025" value="'+_tariffUI+'" oninput="setCost(\'tariffPct\',this.value)"><div class="sl-val">'+(_tariffUI*100).toFixed(1)+'%</div></div>';
+  h += '<div style="font-size:.82rem;color:#5A5F66;text-align:right;margin-top:2px">Tariff premium: '+FMM(cs.tariffCost)+'</div>';
+  h += '</div>';
+
   h += '<div class="card"><div class="card-title">Project Cost Buildup</div>';
   h += '<div class="card-sub">Each markup is a share of total project cost, per the Northwestern Project Budget Breakdown (June 2026). Total = base construction \u00f7 (1 \u2212 \u03a3 markups). Every percentage is editable.</div>';
   h += _ladder('Base Construction (Q'+S.cost.baseQuarter+' '+S.cost.baseYear+') \u00b7 '+_pctOfProj(cs.constructionCost).toFixed(0)+'%', cs.constructionCost, {rule:true});
   h += '<div style="font-size:.74rem;text-transform:uppercase;letter-spacing:.06em;color:#5A5F66;font-weight:700;margin:12px 0 0">Hard Costs (% of total project)</div>';
   h += _pctRow('Design Contingency', 'designContingencyPct', cs.designContingency);
   h += _pctRow('Construction Contingency', 'constructionContingencyPct', cs.constructionContingency);
-  h += _pctRow('Escalation (4%/yr, 36mo.)', 'escalationPct', cs.escalationCost);
+  h += _ladder('Escalation ('+(cs.escalationPct*100).toFixed(1)+'% \u00b7 '+(cs.yearsToMid||0).toFixed(2)+' yr \u2014 set on Escalation card)', cs.escalationCost);
+  if (cs.tariffCost > 0) h += _ladder('Tariff ('+(cs.tariffPct*100).toFixed(1)+'% \u2014 set on Escalation card)', cs.tariffCost);
   h += _ladder('Hard Cost \u00b7 '+_pctOfProj(cs.hardCost).toFixed(0)+'%', cs.hardCost, {big:true, rule:true});
   h += '<div style="font-size:.74rem;text-transform:uppercase;letter-spacing:.06em;color:#5A5F66;font-weight:700;margin:14px 0 0">Soft Costs (% of total project)</div>';
   h += _pctRow('Professional Services', 'professionalServicesPct', _soft('professionalServices'));
@@ -3492,9 +3554,32 @@ function renderCost(d) {
   return h;
 }
 
+// v0.8.2: the scenario-comparison views read each scenario's cost SNAPSHOT
+// (sc.data), frozen when the scenarios were built — so edits to the live Fitout
+// Rate Menu (or any global input) didn't move the chart. Recompute every
+// scenario's data on the fly from its own state against the CURRENT menu/inputs,
+// restoring the working state afterward. This makes the chart + scenario cards
+// track menu edits even with no scenario loaded.
+function _recomputeScenarioData() {
+  var scs = S.scenarios || [];
+  if (!scs.length) return;
+  // Save the live working state (excluding the heavy scenarios array).
+  var saved = {};
+  Object.keys(S).forEach(function(k){ if (k !== 'scenarios') saved[k] = JSON.parse(JSON.stringify(S[k])); });
+  try {
+    scs.forEach(function(sc){
+      if (!sc || !sc.state) return;
+      Object.keys(sc.state).forEach(function(k){ if (k!=='scenarios' && k!=='activeScenario') S[k] = JSON.parse(JSON.stringify(sc.state[k])); });
+      sc.data = JSON.parse(JSON.stringify(C()));
+    });
+  } finally {
+    Object.keys(saved).forEach(function(k){ if (k!=='scenarios' && k!=='activeScenario') S[k] = saved[k]; });
+  }
+}
 function renderCostScenarioCharts() {
   var scenarios = S.scenarios;
   if (scenarios.length === 0) return '';
+  _recomputeScenarioData();
 
   // Build unified category list for all scenarios
   // Categories: each PI typology, Shared (aggregated), Community, Event, Support, C&S, Site
@@ -3895,6 +3980,9 @@ function setLabBudget(val) {
 // ============================================================
 function renderScenarios(d) {
   var h = '';
+  // v0.8.2: refresh each scenario's cost/area snapshot against the current rate
+  // menu + inputs so the comparison cards/table/chart reflect live edits.
+  if (typeof _recomputeScenarioData === 'function') _recomputeScenarioData();
 
   // ── CURRENT PROGRAM SUMMARY (always visible) ──
   // v0.5.40: Research Overall now folds Collaboration in alongside labs +
@@ -4677,6 +4765,10 @@ function exportJSON() {
     if (sc.state) Object.keys(sc.state).forEach(function(k){ if (k !== 'scenarios') st[k] = sc.state[k]; });
     return { name: sc.name, desc: sc.desc, state: st, data: sc.data };
   });
+  // v0.8.2: the Fitout Rate Menu lives on window.BENCH_RATES (a global, not part
+  // of S), so capture it here as `rateMenu` — this is what makes the curated
+  // menu round-trip on export/import and survive a reload.
+  exportState.rateMenu = (window.BENCH_RATES || []);
   var json = JSON.stringify(exportState, null, 2);
   var filename = 'NEB_Dashboard_' + new Date().toISOString().slice(0,10) + '.json';
   var blob = new Blob([json], { type: 'application/json' });
@@ -4714,6 +4806,12 @@ function importJSON(event) {
         event.target.value = '';
         return;
       }
+      // v0.8.2: restore the Fitout Rate Menu (window global) if the export
+      // carried one, then keep it out of S so it stays a pure global.
+      if (Array.isArray(loaded.rateMenu) && loaded.rateMenu.length) {
+        window.BENCH_RATES = loaded.rateMenu;
+      }
+      delete loaded.rateMenu;
       // Replace S entirely, but keep the reference (so all closures still work)
       Object.keys(S).forEach(function(k){ delete S[k]; });
       Object.keys(loaded).forEach(function(k){ S[k] = loaded[k]; });
@@ -6718,25 +6816,70 @@ if (typeof buildPresetScenarios === 'function') {
 // June 2026. The benchmark library is used by the Cost Detail mapping
 // dropdowns to assign a $/SF fit-out rate per program category.
 // ============================================================
+// v0.8.3: each menu entry carries a `cat` (FICM program category) so the Cost
+// Detail lines mapped to it inherit a category + color, driving the cost-by-
+// category bar chart. Categories: research, office, collaboration, support,
+// learning, core.
+// v0.8.4: curated 13-entry menu baked from the user's session (2026-06-06).
 window.BENCH_RATES = [
-  { key:'core_shell',    label:'Core & Shell',           rate:950  },   // incl. $290/SF envelope (was $212)
-  { key:'wet_bioe',      label:'Wet Lab — BioE',         rate:646  },
-  { key:'wet_chem',      label:'Wet Chem / Materials',   rate:830  },
-  { key:'dry_large',     label:'Dry Lab / Large Lab',    rate:538  },
-  { key:'computational', label:'Computational',          rate:538  },
-  { key:'flex',          label:'Flex Lab',               rate:468  },
-  { key:'office',        label:'Office',                 rate:757  },
-  { key:'writeup',       label:'Write-Up / Desk',        rate:540  },
-  { key:'community',     label:'Community',              rate:605  },
-  { key:'event',         label:'Event',                  rate:860  },
-  { key:'optics_nano',   label:'Optics — Nano (Higher Intensity)', rate:1680 },
-  { key:'optics_int',    label:'Optics — Lower Intensity',         rate:646  },
-  { key:'adv_imaging',   label:'Advanced Imaging',       rate:646  },
-  { key:'cleanroom',     label:'Cleanroom Nano-Fab',     rate:425  },
-  { key:'battery',       label:'Battery / Energy',       rate:425  },
-  { key:'support',       label:'Support',                rate:342  },
-  { key:'site',          label:'Site / Demo',            rate:90   }
+  { key:'core_shell',    label:'Core & Shell',           rate:950,  cat:'core'          },
+  { key:'wet_bioe',      label:'Wet Lab — BioE',         rate:650,  cat:'research'      },
+  { key:'wet_chem',      label:'Wet Chem / Materials',   rate:830,  cat:'research'      },
+  { key:'dry_large',     label:'Dry Lab',                rate:575,  cat:'research'      },
+  { key:'office',        label:'Office',                 rate:540,  cat:'office'        },
+  { key:'community',     label:'Collab & Community',     rate:425,  cat:'collaboration' },
+  { key:'event',         label:'Classroom / Event',      rate:550,  cat:'learning'      },
+  { key:'optics_high',   label:'Optics High',            rate:860,  cat:'research'      },
+  { key:'optics_low',    label:'Optics Low',             rate:760,  cat:'research'      },
+  { key:'cleanroom',     label:'Cleanroom',              rate:1680, cat:'core'          },
+  { key:'support',       label:'Support',                rate:340,  cat:'support'       },
+  { key:'site',          label:'Site',                   rate:90,   cat:'core'          },
+  { key:'warm_shell',    label:'Warm Shell',             rate:250,  cat:'core'          }
 ];
+// FICM category → color + label, used by the rate-menu Category dropdown and the
+// Cost-by-Category chart.
+window.RATE_CATS = [
+  { id:'research',      label:'Research',      color:'var(--clrResearch)' },
+  { id:'office',        label:'Office',        color:(typeof FICM!=='undefined'?FICM.office:'#6E7E90') },
+  { id:'collaboration', label:'Collaboration', color:'var(--clrCommunity)' },
+  { id:'support',       label:'Support',       color:'var(--clrSupport)' },
+  { id:'learning',      label:'Learning',      color:'var(--clrEvent)' },
+  { id:'core',          label:'Core',          color:'var(--clrCore)' }
+];
+function _rateCatColor(id){ var c=(window.RATE_CATS||[]).filter(function(x){return x.id===id})[0]; return c?c.color:'var(--mut)'; }
+function _rateCatLabel(id){ var c=(window.RATE_CATS||[]).filter(function(x){return x.id===id})[0]; return c?c.label:id; }
+// Category of a Cost Detail line = the category of the menu entry it maps to.
+function _lineCat(mapType, key){
+  var bm=(S.cost&&S.cost.benchMap)||{}; var bk=bm[mapType+':'+key];
+  var e=(window.BENCH_RATES||[]).filter(function(x){return x.key===bk})[0];
+  return (e&&e.cat) || 'research';
+}
+function setMenuCategory(key, cat){
+  var b=(window.BENCH_RATES||[]).filter(function(x){return x.key===key})[0];
+  if (b) b.cat=cat; render();
+}
+// v0.8.4: keep every benchMap pointing at a valid menu key after the menu was
+// re-curated to 13 entries. Renamed keys are remapped; anything no longer in the
+// menu is dropped so that line falls back to its stored rate (e.g. shared
+// facilities → their coreRates). Idempotent — safe to run each render.
+function _migrateMenuKeys(){
+  var valid={}; (window.BENCH_RATES||[]).forEach(function(b){ valid[b.key]=1; });
+  var M={ optics_int:'optics_low', optics_nano:'optics_high', computational:'dry_large', writeup:'office', dry_large_old:'dry_large' };
+  function fix(bm){
+    if(!bm) return;
+    // Unallocated / Shell → the curated Warm Shell rate; Classroom → the
+    // combined Classroom / Event entry.
+    if(!bm['cost:unassignedRate'] || bm['cost:unassignedRate']==='wet_chem') bm['cost:unassignedRate']='warm_shell';
+    if(bm['cost:classroomRate']==='office') bm['cost:classroomRate']='event';
+    Object.keys(bm).forEach(function(k){
+      var v=bm[k]; if(M[v]!=null) v=M[v];
+      if(!valid[v]){ delete bm[k]; return; }   // unknown key → fall back to stored rate
+      bm[k]=v;
+    });
+  }
+  if(typeof S!=='undefined' && S.cost) fix(S.cost.benchMap);
+  if(typeof S!=='undefined') (S.scenarios||[]).forEach(function(sc){ if(sc&&sc.state&&sc.state.cost) fix(sc.state.cost.benchMap); });
+}
 
 // One-time application of the latest cost data. Guarded by a revision flag so
 // it brings the new numbers in once, after which the user can tune any slider.
@@ -6803,6 +6946,16 @@ window.BENCH_RATES = [
   if (c.permitsPct                 == null) c.permitsPct                 = 0.02;
   if (c.pmFeePct                   == null) c.pmFeePct                   = 0.01;
   if (c.unassignedRate             == null) c.unassignedRate             = 200;  // warm-shell $/SF for unallocated NASF
+  // v0.8.3: escalation is computed from a base annual rate compounded between
+  // the cost-basis quarter and the target/midpoint quarter (Escalation card).
+  if (c.escalationRate             == null) c.escalationRate             = 0.04; // 4%/yr
+  if (c.baseYear                   == null) c.baseYear                   = 2025;
+  if (c.baseQuarter                == null) c.baseQuarter                = 4;
+  if (c.escalationYear             == null) c.escalationYear             = 2027;
+  if (c.escalationQuarter          == null) c.escalationQuarter          = 4;
+  if (c.tariffPct                  == null) c.tariffPct                  = 0;    // tariff premium (0–6%)
+  if (c.piOfficeRate               == null) c.piOfficeRate               = 757;  // PI office line fallback
+  if (c.piWriteupRate              == null) c.piWriteupRate              = 540;  // PI write-up line fallback
 
   // v0.7.7: default benchmark mapping per line. This is what the Cost Detail
   // dropdown shows when a line's $/SF matches a benchmark — so a $646 Optics
@@ -6812,15 +6965,17 @@ window.BENCH_RATES = [
   c.benchMap = c.benchMap || {};
   var _defBench = {
     'type:wetbio':'wet_bioe', 'type:wetchem':'wet_chem', 'type:drywkshp':'dry_large',
-    'type:comp':'computational', 'type:optics':'optics_int', 'type:optnano':'optics_nano',
+    'type:comp':'dry_large', 'type:optics':'optics_low', 'type:optnano':'optics_high',
     'direct:coreShellRate':'core_shell', 'direct:siteRate':'site',
     'cost:communityRate':'community', 'cost:collaborationRate':'community',
-    'cost:eventRate':'event', 'cost:classroomRate':'office', 'cost:teachingLabRate':'wet_bioe',
+    'cost:eventRate':'event', 'cost:classroomRate':'event', 'cost:teachingLabRate':'wet_bioe',
     'cost:learningSupportRate':'support', 'cost:officeEnclosedRate':'office',
-    'cost:officeOpenRate':'office', 'cost:officeSupportRate':'support', 'cost:supportRate':'support'
+    'cost:officeOpenRate':'office', 'cost:officeSupportRate':'support', 'cost:supportRate':'support',
+    'cost:piOfficeRate':'office', 'cost:piWriteupRate':'office', 'cost:unassignedRate':'warm_shell'
   };
   Object.keys(_defBench).forEach(function(k){ if (c.benchMap[k] == null) c.benchMap[k] = _defBench[k]; });
-  (S.coreItems || []).forEach(function(ci){ var k = 'core:'+ci.name; if (c.benchMap[k] == null) c.benchMap[k] = 'adv_imaging'; });
+  // Shared facilities have no default menu mapping — they fall back to their own
+  // coreRates (editable on the Shared Facilities card).
 })();
 
 // ============================================================
@@ -8040,6 +8195,7 @@ if (typeof floorVis === 'function') {
 // render() dispatcher — label-keyed (v0.5)
 // ============================================================
 render = function() {
+  if (typeof _migrateMenuKeys === 'function') _migrateMenuKeys();
   var d = C();
   renderTabs();
   renderScenarioBar();
@@ -11104,6 +11260,35 @@ render();
 // v0.7: Cost Composition as a full-width horizontal stacked bar (replaces the
 // vertical tower). Segments follow the project-cost buildup; milestones below
 // mark Base Construction, Hard Cost, and Total Project.
+// v0.8.3: Construction cost grouped by FICM category. Each Cost Detail line
+// inherits the category of the Fitout Rate Menu entry it maps to; Core & Shell
+// and Site use their own menu entries' categories.
+function _buildCostByCategoryCard(d) {
+  var cs = d.cost;
+  var byCat = {};
+  (cs.progLines || []).forEach(function(p){
+    var cat = _lineCat(p.mapType, p.mapKey);
+    byCat[cat] = (byCat[cat] || 0) + (p.cost || 0);
+  });
+  var csCat = _lineCat('direct','coreShellRate');
+  byCat[csCat] = (byCat[csCat] || 0) + (cs.totalCoreShell || 0);
+  var stCat = _lineCat('direct','siteRate');
+  byCat[stCat] = (byCat[stCat] || 0) + (cs.totalSite || 0);
+  var cats = (window.RATE_CATS || []);
+  var total = 0; cats.forEach(function(c){ total += byCat[c.id] || 0; });
+  if (total <= 0) return '';
+  var h = '<div class="card"><div class="card-title">Construction Cost by FICM Category</div>';
+  h += '<div class="card-sub">Program fit-out + core &amp; shell + site, grouped by the <strong>Category</strong> set on each Fitout Rate Menu entry. Change a menu row’s category to re-bucket its cost here.</div>';
+  h += '<div style="display:flex;height:34px;border-radius:8px;overflow:hidden;border:1px solid var(--bdr)">';
+  cats.forEach(function(c){ var v = byCat[c.id] || 0; if (v <= 0) return; var pct = v/total*100; h += '<div title="'+c.label+': '+FMM(v)+' ('+pct.toFixed(0)+'%)" style="width:'+pct.toFixed(2)+'%;background:'+c.color+'"></div>'; });
+  h += '</div>';
+  h += '<div style="display:flex;flex-wrap:wrap;gap:8px 18px;margin-top:12px">';
+  cats.forEach(function(c){ var v = byCat[c.id] || 0; if (v <= 0) return; h += '<div style="display:flex;align-items:center;gap:6px"><span style="width:11px;height:11px;border-radius:3px;background:'+c.color+'"></span><span style="font-size:.85rem;color:var(--navy);font-weight:600">'+c.label+'</span><span style="font-family:\'IBM Plex Mono\',monospace;font-size:.85rem;color:var(--navy)">'+FMM(v)+'</span><span style="font-size:.76rem;color:var(--mut)">'+(v/total*100).toFixed(0)+'%</span></div>'; });
+  h += '</div>';
+  h += '<div style="text-align:right;margin-top:8px;font-family:\'IBM Plex Mono\',monospace;font-weight:700;color:var(--navy)">Construction (fit-out + C&amp;S + site): '+FMM(total)+'</div>';
+  h += '</div>';
+  return h;
+}
 function _skillBuildCostCompositionBar(d, cs) {
   var segs = [
     { label:'Core & Shell',            amount: cs.totalCoreShell,          color:'#1B3A5C', tc:'#fff' },
