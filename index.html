@@ -3117,6 +3117,14 @@ function renderEnergy(d) {
 // TAB 9: COST
 // ============================================================
 function setCost(key, val) { S.cost[key] = parseFloat(val); render(); }
+// v0.8.6: one slider per period — value is a quarter index (year*4 + quarter-1)
+// that decodes into the year + quarter fields.
+function setCostQuarter(yearKey, quarterKey, qIndex) {
+  qIndex = parseInt(qIndex, 10);
+  S.cost[yearKey] = Math.floor(qIndex / 4);
+  S.cost[quarterKey] = (qIndex % 4) + 1;
+  render();
+}
 function setCostInt(key, val) { S.cost[key] = parseInt(val); render(); }
 function setTypeRate(id, val) { S.cost.typeRates[id] = parseInt(val); render(); }
 function setCoreRate(name, val) { S.cost.coreRates[name] = parseInt(val); render(); }
@@ -3499,15 +3507,13 @@ function renderCost(d) {
   h += '<div class="card-sub">Escalation compounds a base annual rate from the cost-basis quarter to the construction midpoint (target). Nudge the rate or the target quarter to land on your target escalation. Tariff is a separate material premium.</div>';
   h += '<label class="sl">Base Escalation Rate (annual)</label>';
   h += '<div class="sl-row"><input type="range" min="0" max="0.10" step="0.001" value="'+_escRateUI+'" onchange="setCost(\'escalationRate\',this.value)"><div class="sl-val">'+(_escRateUI*100).toFixed(1)+'%/yr</div></div>';
+  var _baseIdx = _baseYrUI*4 + (_baseQUI-1);
+  var _tgtIdx  = _tgtYrUI*4 + (_tgtQUI-1);
   h += '<div style="display:flex;gap:18px;flex-wrap:wrap">';
-  h += '<div style="flex:1;min-width:220px"><label class="sl">Cost Basis &mdash; Year</label>'
-     + '<div class="sl-row"><input type="range" min="2023" max="2030" step="1" value="'+_baseYrUI+'" onchange="setCostInt(\'baseYear\',this.value)"><div class="sl-val">'+_baseYrUI+'</div></div>'
-     + '<label class="sl">Cost Basis &mdash; Quarter</label>'
-     + '<div class="sl-row"><input type="range" min="1" max="4" step="1" value="'+_baseQUI+'" onchange="setCostInt(\'baseQuarter\',this.value)"><div class="sl-val">Q'+_baseQUI+'</div></div></div>';
-  h += '<div style="flex:1;min-width:220px"><label class="sl">Target / Midpoint &mdash; Year</label>'
-     + '<div class="sl-row"><input type="range" min="2024" max="2033" step="1" value="'+_tgtYrUI+'" onchange="setCostInt(\'escalationYear\',this.value)"><div class="sl-val">'+_tgtYrUI+'</div></div>'
-     + '<label class="sl">Target / Midpoint &mdash; Quarter</label>'
-     + '<div class="sl-row"><input type="range" min="1" max="4" step="1" value="'+_tgtQUI+'" onchange="setCostInt(\'escalationQuarter\',this.value)"><div class="sl-val">Q'+_tgtQUI+'</div></div></div>';
+  h += '<div style="flex:1;min-width:220px"><label class="sl">Cost Basis (Year &amp; Quarter)</label>'
+     + '<div class="sl-row"><input type="range" min="'+(2023*4)+'" max="'+(2030*4+3)+'" step="1" value="'+_baseIdx+'" onchange="setCostQuarter(\'baseYear\',\'baseQuarter\',this.value)"><div class="sl-val">Q'+_baseQUI+' '+_baseYrUI+'</div></div></div>';
+  h += '<div style="flex:1;min-width:220px"><label class="sl">Target / Midpoint (Year &amp; Quarter)</label>'
+     + '<div class="sl-row"><input type="range" min="'+(2024*4)+'" max="'+(2033*4+3)+'" step="1" value="'+_tgtIdx+'" onchange="setCostQuarter(\'escalationYear\',\'escalationQuarter\',this.value)"><div class="sl-val">Q'+_tgtQUI+' '+_tgtYrUI+'</div></div></div>';
   h += '</div>';
   h += '<div class="derived" style="margin-top:12px"><div class="derived-label">Total Escalation &middot; Q'+_baseQUI+' '+_baseYrUI+' &rarr; Q'+_tgtQUI+' '+_tgtYrUI+' ('+(cs.yearsToMid||0).toFixed(2)+' yr @ '+(_escRateUI*100).toFixed(1)+'%/yr)</div><div class="derived-val">'+(cs.escalationPct*100).toFixed(1)+'% &middot; '+FMM(cs.escalationCost)+'</div></div>';
   h += '<label class="sl" style="margin-top:14px">Tariff Premium</label>';
