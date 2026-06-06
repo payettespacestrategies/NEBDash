@@ -6919,7 +6919,7 @@ if (typeof buildPresetScenarios === 'function') {
 // learning, core.
 // v0.8.4: curated 13-entry menu baked from the user's session (2026-06-06).
 window.BENCH_RATES = [
-  { key:'core_shell',    label:'Core & Shell',           rate:950,  cat:'core'          },
+  { key:'core_shell',    label:'Core & Shell',           rate:950,  cat:'coreshell'     },
   { key:'wet_bioe',      label:'Wet Lab — BioE',         rate:650,  cat:'research'      },
   { key:'wet_chem',      label:'Wet Chem / Materials',   rate:830,  cat:'research'      },
   { key:'dry_large',     label:'Dry Lab',                rate:575,  cat:'research'      },
@@ -6930,8 +6930,8 @@ window.BENCH_RATES = [
   { key:'optics_low',    label:'Optics Low',             rate:760,  cat:'research'      },
   { key:'cleanroom',     label:'Cleanroom',              rate:1680, cat:'core'          },
   { key:'support',       label:'Support',                rate:340,  cat:'support'       },
-  { key:'site',          label:'Site',                   rate:90,   cat:'core'          },
-  { key:'warm_shell',    label:'Warm Shell',             rate:250,  cat:'core'          }
+  { key:'site',          label:'Site',                   rate:90,   cat:'site'          },
+  { key:'warm_shell',    label:'Warm Shell',             rate:250,  cat:'shell'         }
 ];
 // FICM category → color + label, used by the rate-menu Category dropdown and the
 // Cost-by-Category chart.
@@ -6941,7 +6941,10 @@ window.RATE_CATS = [
   { id:'collaboration', label:'Collaboration', color:'var(--clrCommunity)' },
   { id:'support',       label:'Support',       color:'var(--clrSupport)' },
   { id:'learning',      label:'Learning',      color:'var(--clrEvent)' },
-  { id:'core',          label:'Core',          color:'var(--clrCore)' }
+  { id:'core',          label:'Core',          color:'var(--clrCore)' },
+  { id:'coreshell',     label:'Core/Shell',    color:'#8A9099' },
+  { id:'site',          label:'Site',          color:'#AECF9C' },
+  { id:'shell',         label:'Shell',         color:'#F8D5CC' }
 ];
 function _rateCatColor(id){ var c=(window.RATE_CATS||[]).filter(function(x){return x.id===id})[0]; return c?c.color:'var(--mut)'; }
 function _rateCatLabel(id){ var c=(window.RATE_CATS||[]).filter(function(x){return x.id===id})[0]; return c?c.label:id; }
