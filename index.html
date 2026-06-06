@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0">
 <title>NEB Programming Dashboard</title>
-<link href="https://fonts.googleapis.com/css2?family=Sora:wght@300;400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Sora:wght@300;400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600;700&family=Roboto:wght@400;500;700;900&display=swap" rel="stylesheet">
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 :root{--navy:#1B3A5C;--blue:#2E75B6;--teal:#66C6C1;--mTeal:#9EDDD1;--lTeal:#CAEADF;--yel:#FFE885;--lYel:#FFF4C7;--gold:#FEB522;--peri:#98ACE5;--lBl:#B6CDEF;--coral:#F28D79;--pink:#EFB1D0;--gray:#C2C3C8;--dk:#404040;--bg:#F7F6F3;--card:#FFF;--bdr:#E2DED8;--mut:#888780;--r:12px;--green:#5BAD5E;--dGreen:#2A8C3C;
@@ -3594,74 +3594,114 @@ function _angledWrapLabel(name, x, y) {
   if (cur) lines.push(cur);
   if (lines.length > 2) lines = [lines[0], lines.slice(1).join(' ')];
   function esc(s){ return s.replace(/&/g,'&amp;').replace(/</g,'&lt;'); }
-  var s = '<text transform="rotate(-35 '+x+' '+y+')" x="'+x+'" y="'+y+'" text-anchor="end" font-size="9.5" fill="var(--navy)" font-weight="600">';
+  var s = '<text transform="rotate(-35 '+x+' '+y+')" x="'+x+'" y="'+y+'" text-anchor="end" font-size="9.5" fill="var(--navy)" font-weight="700" style="font-family:\'Roboto\',Arial,sans-serif">';
   lines.forEach(function(l,i){ s += '<tspan x="'+x+'" dy="'+(i===0?0:10.5)+'">'+esc(l)+'</tspan>'; });
   s += '</text>';
   return s;
 }
+// Which scenario is selected for the detail bar (click a top chart to change).
+function _selScen() {
+  var i = window._scenSel;
+  if (i == null) i = (S.activeScenario != null && S.activeScenario >= 0) ? S.activeScenario : 0;
+  var n = (S.scenarios || []).length;
+  if (i < 0) i = 0; if (i >= n) i = n - 1;
+  return i;
+}
+function selectScenario(i) { window._scenSel = parseInt(i, 10); render(); }
 function _buildScenarioTotalCostChart() {
   var scs = S.scenarios || []; if (!scs.length) return '';
-  var data = scs.map(function(sc){ return { name:sc.name, cost:(sc.data&&sc.data.cost?sc.data.cost.projectCost:0) }; });
+  var sel = _selScen();
+  var HARD = '#1B3A5C', SOFT = '#C56F26';
+  var data = scs.map(function(sc){
+    var cc = (sc.data && sc.data.cost) ? sc.data.cost : {};
+    var hard = cc.hardCost || 0;
+    var soft = (cc.softCostTotal != null) ? cc.softCostTotal : Math.max(0, (cc.projectCost||0) - hard);
+    return { name:sc.name, cost:cc.projectCost||0, hard:hard, soft:soft };
+  });
   var maxC = Math.max.apply(null, data.map(function(d){return d.cost})); if (!(maxC>0)) maxC = 1;
   var n = data.length;
-  var W = 560, padL = 50, padR = 14, padT = 40, padB = 104, chartH = 250;
+  var W = 560, padL = 50, padR = 14, padT = 42, padB = 110, chartH = 248;
   var innerW = W - padL - padR, slot = innerW / n, barW = Math.min(56, slot*0.62);
   var h = '<div class="card" style="margin:0"><div class="card-title">Total Project Cost by Scenario</div>';
-  h += '<div class="card-sub">One bar per scenario — total project cost.</div>';
-  h += '<div style="overflow-x:auto"><svg viewBox="0 0 '+W+' '+(chartH+padT+padB)+'" style="width:100%;font-family:\'IBM Plex Mono\',monospace">';
+  h += '<div class="card-sub">Total project cost — <span style="color:'+HARD+';font-weight:700">hard</span> + <span style="color:'+SOFT+';font-weight:700">soft</span>. Click a bar to detail it below.</div>';
+  h += '<div style="overflow-x:auto"><svg viewBox="0 0 '+W+' '+(chartH+padT+padB)+'" style="width:100%;font-family:\'Roboto\',\'IBM Plex Mono\',monospace">';
   for (var g=0; g<=4; g++){ var yy=padT+chartH-chartH*g/4, vv=maxC*g/4;
     h += '<line x1="'+padL+'" y1="'+yy+'" x2="'+(W-padR)+'" y2="'+yy+'" stroke="var(--bdr)" stroke-dasharray="3,3"/>';
     h += '<text x="'+(padL-7)+'" y="'+(yy+3)+'" text-anchor="end" font-size="9" fill="var(--mut)">'+FMM(vv)+'</text>'; }
   data.forEach(function(d,i){
     var x = padL + slot*i + slot/2;
-    var bh = (d.cost/maxC)*chartH, y = padT+chartH-bh;
-    h += '<rect x="'+(x-barW/2).toFixed(1)+'" y="'+y.toFixed(1)+'" width="'+barW.toFixed(1)+'" height="'+Math.max(bh,1).toFixed(1)+'" rx="3" fill="#2E4A63"/>';
-    h += '<text x="'+x+'" y="'+(y-9)+'" text-anchor="middle" font-size="15" font-weight="800" fill="var(--navy)">'+FMM(d.cost)+'</text>';
+    var totH = (d.cost/maxC)*chartH, hardH = (d.hard/maxC)*chartH, softH = (d.soft/maxC)*chartH;
+    var yTop = padT+chartH-totH, x0 = x-barW/2, on = (i===sel);
+    h += '<g style="cursor:pointer" onclick="selectScenario('+i+')">';
+    h += '<rect x="'+x0.toFixed(1)+'" y="'+(padT+chartH-hardH).toFixed(1)+'" width="'+barW.toFixed(1)+'" height="'+Math.max(hardH,1).toFixed(1)+'" fill="'+HARD+'"/>';
+    h += '<rect x="'+x0.toFixed(1)+'" y="'+(padT+chartH-hardH-softH).toFixed(1)+'" width="'+barW.toFixed(1)+'" height="'+Math.max(softH,0.5).toFixed(1)+'" fill="'+SOFT+'"/>';
+    if (on) h += '<rect x="'+(x0-2.5).toFixed(1)+'" y="'+(yTop-2.5).toFixed(1)+'" width="'+(barW+5).toFixed(1)+'" height="'+(totH+5).toFixed(1)+'" fill="none" stroke="var(--navy)" stroke-width="2.5" rx="3"/>';
+    h += '<text x="'+x+'" y="'+(yTop-9)+'" text-anchor="middle" font-size="15" font-weight="900" fill="var(--navy)" style="font-family:\'Roboto\',sans-serif">'+FMM(d.cost)+'</text>';
     h += _angledWrapLabel(d.name, x, padT+chartH+15);
+    h += '</g>';
   });
-  h += '</svg></div></div>';
+  h += '</svg></div>';
+  h += '<div style="display:flex;gap:16px;margin-top:2px"><div style="display:flex;align-items:center;gap:5px"><span style="width:11px;height:11px;border-radius:2px;background:'+HARD+'"></span><span style="font-size:.78rem;color:var(--navy);font-weight:600">Hard Costs</span></div><div style="display:flex;align-items:center;gap:5px"><span style="width:11px;height:11px;border-radius:2px;background:'+SOFT+'"></span><span style="font-size:.78rem;color:var(--navy);font-weight:600">Soft Costs</span></div></div>';
+  h += '</div>';
   return h;
 }
 function _buildScenarioMakeupChart() {
   var scs = S.scenarios || []; if (!scs.length) return '';
+  var sel = _selScen();
   var SEG = [
-    { key:'construction', label:'Construction (fit-out + core & shell + site)', color:'#13314D', fam:'Hard' },
-    { key:'design',       label:'Design Contingency',      color:'#2E5E86', fam:'Hard' },
-    { key:'constr',       label:'Construction Contingency', color:'#5587AE', fam:'Hard' },
-    { key:'esc',          label:'Escalation',              color:'#86AFD0', fam:'Hard' },
-    { key:'tariff',       label:'Tariff',                  color:'#B8D2E8', fam:'Hard' },
-    { key:'services',     label:'Professional Services',   color:'#9C4413', fam:'Soft' },
-    { key:'owner',        label:'Owner Work',              color:'#C56F26', fam:'Soft' },
-    { key:'projcont',     label:'Project Contingency',     color:'#E0944A', fam:'Soft' },
-    { key:'permits',      label:'Permits',                 color:'#EEB87E', fam:'Soft' },
-    { key:'fees',         label:'Project Mgmt Fee',        color:'#F7D9B4', fam:'Soft' }
+    { key:'construction', label:'Construction (fit-out + core & shell + site)', color:'#13314D' },
+    { key:'design',       label:'Design Contingency',       color:'#2E5E86' },
+    { key:'constr',       label:'Construction Contingency',  color:'#5587AE' },
+    { key:'esc',          label:'Escalation',               color:'#86AFD0' },
+    { key:'tariff',       label:'Tariff',                   color:'#B8D2E8' }
   ];
-  function vals(cc){
-    function soft(k){ var x=(cc.softLines||[]).filter(function(s){return s.key===k})[0]; return x?x.amount:0; }
-    return { construction:cc.constructionCost||0, design:cc.designContingency||0, constr:cc.constructionContingency||0,
-             esc:cc.escalationCost||0, tariff:cc.tariffCost||0,
-             services:soft('professionalServices'), owner:soft('ownerWork'), projcont:soft('projectContingency'),
-             permits:soft('permits'), fees:soft('pmFee') };
-  }
-  var h = '<div class="card" style="margin:0"><div class="card-title">Project Cost Makeup by Scenario</div>';
-  h += '<div class="card-sub">Share of total project cost — <span style="color:#13314D;font-weight:700">hard costs</span> (blue) + <span style="color:#9C4413;font-weight:700">soft costs</span> (orange).</div>';
+  function vals(cc){ return { construction:cc.constructionCost||0, design:cc.designContingency||0, constr:cc.constructionContingency||0, esc:cc.escalationCost||0, tariff:cc.tariffCost||0 }; }
+  var hards = scs.map(function(sc){ var cc=sc.data&&sc.data.cost?sc.data.cost:{}; var v=vals(cc); return SEG.reduce(function(a,s){return a+(v[s.key]||0)},0); });
+  var maxHard = Math.max.apply(null, hards); if (!(maxHard>0)) maxHard = 1;
+  var h = '<div class="card" style="margin:0"><div class="card-title">Hard Cost Makeup by Scenario</div>';
+  h += '<div class="card-sub">Hard cost composition — bar length is proportional to each scenario’s hard cost. Click a row to detail it below.</div>';
   h += '<div style="display:flex;flex-direction:column;gap:9px;margin-top:6px">';
-  scs.forEach(function(sc){
+  scs.forEach(function(sc,i){
     var cc = (sc.data && sc.data.cost) ? sc.data.cost : {};
-    var v = vals(cc);
-    var tot = cc.projectCost || SEG.reduce(function(a,s){return a+(v[s.key]||0)},0); if (!(tot>0)) tot = 1;
+    var v = vals(cc), hard = hards[i], on = (i===sel);
     var nm = sc.name.replace(/\s*—\s*/,' ');
-    var hardPct = (v.construction+v.design+v.constr+v.esc+v.tariff)/tot*100;
-    h += '<div>';
-    h += '<div style="display:flex;justify-content:space-between;font-size:.72rem;font-weight:700;color:var(--navy);margin-bottom:2px"><span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:70%">'+nm+'</span><span style="color:var(--mut);font-weight:600">'+hardPct.toFixed(0)+'% hard / '+(100-hardPct).toFixed(0)+'% soft</span></div>';
-    h += '<div style="display:flex;height:20px;border-radius:4px;overflow:hidden;border:1px solid var(--bdr)">';
-    SEG.forEach(function(s){ var val=v[s.key]||0; if(val<=0) return; var pct=val/tot*100; h += '<div title="'+s.label+': '+FMM(val)+' ('+pct.toFixed(1)+'%)" style="width:'+pct.toFixed(3)+'%;background:'+s.color+'"></div>'; });
+    h += '<div style="cursor:pointer;'+(on?'background:#EEF2F7;border-radius:6px;padding:3px 5px;margin:-3px -5px':'')+'" onclick="selectScenario('+i+')">';
+    h += '<div style="display:flex;justify-content:space-between;font-size:.72rem;font-weight:700;color:var(--navy);margin-bottom:2px"><span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:72%">'+nm+'</span><span style="color:var(--mut);font-weight:600">'+FMM(hard)+' hard</span></div>';
+    h += '<div style="width:'+(hard/maxHard*100).toFixed(2)+'%;min-width:3px;display:flex;height:20px;border-radius:4px;overflow:hidden;border:1px solid var(--bdr)">';
+    SEG.forEach(function(s){ var val=v[s.key]||0; if(val<=0) return; var pct=hard>0?val/hard*100:0; h += '<div title="'+s.label+': '+FMM(val)+'" style="width:'+pct.toFixed(3)+'%;background:'+s.color+'"></div>'; });
     h += '</div></div>';
   });
   h += '</div>';
   h += '<div style="display:flex;flex-wrap:wrap;gap:5px 12px;margin-top:12px">';
   SEG.forEach(function(s){ h += '<div style="display:flex;align-items:center;gap:4px"><span style="width:10px;height:10px;border-radius:2px;background:'+s.color+'"></span><span style="font-size:.71rem;color:var(--navy)">'+s.label+'</span></div>'; });
   h += '</div></div>';
+  return h;
+}
+// Construction (fit-out + core & shell + site) for the SELECTED scenario, grouped
+// by FICM category — driven by clicks in the two charts above.
+function _buildSelectedScenarioConstructionBar() {
+  var scs = S.scenarios || []; if (!scs.length) return '';
+  var sel = _selScen(), sc = scs[sel]; if (!sc || !sc.data) return '';
+  var cc = sc.data.cost || {};
+  var bm = (sc.state && sc.state.cost ? sc.state.cost.benchMap : null) || (S.cost && S.cost.benchMap) || {};
+  function lineCatBM(mapType, key){ var bk = bm[mapType+':'+key]; var e=(window.BENCH_RATES||[]).filter(function(x){return x.key===bk})[0]; return (e&&e.cat)||'research'; }
+  var byCat = {};
+  (cc.progLines || []).forEach(function(p){ var cat=lineCatBM(p.mapType,p.mapKey); byCat[cat]=(byCat[cat]||0)+(p.cost||0); });
+  var a=lineCatBM('direct','coreShellRate'); byCat[a]=(byCat[a]||0)+(cc.totalCoreShell||0);
+  var b=lineCatBM('direct','siteRate'); byCat[b]=(byCat[b]||0)+(cc.totalSite||0);
+  var cats = (window.RATE_CATS || []); var total=0; cats.forEach(function(c){ total += byCat[c.id]||0; });
+  if (total <= 0) return '';
+  var nm = sc.name.replace(/\s*—\s*/,' ');
+  var h = '<div class="card" style="margin:0 0 18px"><div class="card-title">Construction Cost by FICM Category — '+nm+'</div>';
+  h += '<div class="card-sub">Fit-out + core &amp; shell + site for the <strong>selected</strong> scenario, grouped by the Category set on each Fitout Rate Menu entry. Click a scenario in the charts above to change this.</div>';
+  h += '<div style="display:flex;height:34px;border-radius:8px;overflow:hidden;border:1px solid var(--bdr)">';
+  cats.forEach(function(c){ var v=byCat[c.id]||0; if(v<=0)return; var pct=v/total*100; h += '<div title="'+c.label+': '+FMM(v)+' ('+pct.toFixed(0)+'%)" style="width:'+pct.toFixed(2)+'%;background:'+c.color+'"></div>'; });
+  h += '</div>';
+  h += '<div style="display:flex;flex-wrap:wrap;gap:8px 18px;margin-top:12px">';
+  cats.forEach(function(c){ var v=byCat[c.id]||0; if(v<=0)return; h += '<div style="display:flex;align-items:center;gap:6px"><span style="width:11px;height:11px;border-radius:3px;background:'+c.color+'"></span><span style="font-size:.85rem;color:var(--navy);font-weight:600">'+c.label+'</span><span style="font-family:\'IBM Plex Mono\',monospace;font-size:.85rem;color:var(--navy)">'+FMM(v)+'</span><span style="font-size:.76rem;color:var(--mut)">'+(v/total*100).toFixed(0)+'%</span></div>'; });
+  h += '</div>';
+  h += '<div style="text-align:right;margin-top:8px;font-family:\'IBM Plex Mono\',monospace;font-weight:700;color:var(--navy)">Construction (fit-out + C&amp;S + site): '+FMM(total)+'</div>';
+  h += '</div>';
   return h;
 }
 function _buildScenarioTopCharts() {
@@ -3671,6 +3711,7 @@ function _buildScenarioTopCharts() {
   h += _buildScenarioTotalCostChart();
   h += _buildScenarioMakeupChart();
   h += '</div>';
+  h += _buildSelectedScenarioConstructionBar();
   return h;
 }
 function renderCostScenarioCharts() {
