@@ -3213,6 +3213,9 @@ function renderCost(d) {
   h += '<div><span style="font-size:1.1rem;font-weight:600;color:var(--mut)">$'+F(Math.round(cs.costPerGSF))+'/GSF</span> <span style="font-size:.8rem;color:var(--mut)">(project)</span></div>';
   h += '</div></div>';
 
+  // ── SCENARIO COMPARISON (top, two half-width cards) ──
+  h += _buildScenarioTopCharts();
+
   // ── DGSF MODEL ──
   h += '<div class="card"><div class="card-title">Departmental Gross (DGSF) Model</div>';
   h += '<div class="card-sub">DGSF = GSF \u00d7 Dept. Gross %. Program fitout rates are applied against each type\u2019s pro-rata GSF share.</div>';
@@ -3495,20 +3498,20 @@ function renderCost(d) {
   h += '<div class="card"><div class="card-title">Escalation &amp; Tariff</div>';
   h += '<div class="card-sub">Escalation compounds a base annual rate from the cost-basis quarter to the construction midpoint (target). Nudge the rate or the target quarter to land on your target escalation. Tariff is a separate material premium.</div>';
   h += '<label class="sl">Base Escalation Rate (annual)</label>';
-  h += '<div class="sl-row"><input type="range" min="0" max="0.10" step="0.001" value="'+_escRateUI+'" oninput="setCost(\'escalationRate\',this.value)"><div class="sl-val">'+(_escRateUI*100).toFixed(1)+'%/yr</div></div>';
+  h += '<div class="sl-row"><input type="range" min="0" max="0.10" step="0.001" value="'+_escRateUI+'" onchange="setCost(\'escalationRate\',this.value)"><div class="sl-val">'+(_escRateUI*100).toFixed(1)+'%/yr</div></div>';
   h += '<div style="display:flex;gap:18px;flex-wrap:wrap">';
   h += '<div style="flex:1;min-width:220px"><label class="sl">Cost Basis &mdash; Year</label>'
-     + '<div class="sl-row"><input type="range" min="2023" max="2030" step="1" value="'+_baseYrUI+'" oninput="setCostInt(\'baseYear\',this.value)"><div class="sl-val">'+_baseYrUI+'</div></div>'
+     + '<div class="sl-row"><input type="range" min="2023" max="2030" step="1" value="'+_baseYrUI+'" onchange="setCostInt(\'baseYear\',this.value)"><div class="sl-val">'+_baseYrUI+'</div></div>'
      + '<label class="sl">Cost Basis &mdash; Quarter</label>'
-     + '<div class="sl-row"><input type="range" min="1" max="4" step="1" value="'+_baseQUI+'" oninput="setCostInt(\'baseQuarter\',this.value)"><div class="sl-val">Q'+_baseQUI+'</div></div></div>';
+     + '<div class="sl-row"><input type="range" min="1" max="4" step="1" value="'+_baseQUI+'" onchange="setCostInt(\'baseQuarter\',this.value)"><div class="sl-val">Q'+_baseQUI+'</div></div></div>';
   h += '<div style="flex:1;min-width:220px"><label class="sl">Target / Midpoint &mdash; Year</label>'
-     + '<div class="sl-row"><input type="range" min="2024" max="2033" step="1" value="'+_tgtYrUI+'" oninput="setCostInt(\'escalationYear\',this.value)"><div class="sl-val">'+_tgtYrUI+'</div></div>'
+     + '<div class="sl-row"><input type="range" min="2024" max="2033" step="1" value="'+_tgtYrUI+'" onchange="setCostInt(\'escalationYear\',this.value)"><div class="sl-val">'+_tgtYrUI+'</div></div>'
      + '<label class="sl">Target / Midpoint &mdash; Quarter</label>'
-     + '<div class="sl-row"><input type="range" min="1" max="4" step="1" value="'+_tgtQUI+'" oninput="setCostInt(\'escalationQuarter\',this.value)"><div class="sl-val">Q'+_tgtQUI+'</div></div></div>';
+     + '<div class="sl-row"><input type="range" min="1" max="4" step="1" value="'+_tgtQUI+'" onchange="setCostInt(\'escalationQuarter\',this.value)"><div class="sl-val">Q'+_tgtQUI+'</div></div></div>';
   h += '</div>';
   h += '<div class="derived" style="margin-top:12px"><div class="derived-label">Total Escalation &middot; Q'+_baseQUI+' '+_baseYrUI+' &rarr; Q'+_tgtQUI+' '+_tgtYrUI+' ('+(cs.yearsToMid||0).toFixed(2)+' yr @ '+(_escRateUI*100).toFixed(1)+'%/yr)</div><div class="derived-val">'+(cs.escalationPct*100).toFixed(1)+'% &middot; '+FMM(cs.escalationCost)+'</div></div>';
   h += '<label class="sl" style="margin-top:14px">Tariff Premium</label>';
-  h += '<div class="sl-row"><input type="range" min="0" max="0.06" step="0.0025" value="'+_tariffUI+'" oninput="setCost(\'tariffPct\',this.value)"><div class="sl-val">'+(_tariffUI*100).toFixed(1)+'%</div></div>';
+  h += '<div class="sl-row"><input type="range" min="0" max="0.06" step="0.0025" value="'+_tariffUI+'" onchange="setCost(\'tariffPct\',this.value)"><div class="sl-val">'+(_tariffUI*100).toFixed(1)+'%</div></div>';
   h += '<div style="font-size:.82rem;color:#5A5F66;text-align:right;margin-top:2px">Tariff premium: '+FMM(cs.tariffCost)+'</div>';
   h += '</div>';
 
@@ -3546,10 +3549,8 @@ function renderCost(d) {
   // Power, Equipment, Plumbing) below. Inputs editable in the card.
   h += _skillBuildSystemsCard(d, cs);
 
-  // ── SCENARIO COMPARISON: STACKED BAR CHARTS (Area + Cost) ──
-  if (S.scenarios.length > 0) {
-    h += renderCostScenarioCharts();
-  }
+  // Scenario comparison now lives at the top of the tab (two half-width cards
+  // under the Cost Summary) — see _buildScenarioTopCharts().
 
   return h;
 }
@@ -3575,6 +3576,96 @@ function _recomputeScenarioData() {
   } finally {
     Object.keys(saved).forEach(function(k){ if (k!=='scenarios' && k!=='activeScenario') S[k] = saved[k]; });
   }
+}
+// v0.8.5: simplified scenario comparison — two half-width cards under the Cost
+// Summary. (1) total project cost per scenario, one-color bars, big $XXXM labels,
+// angled wrapped x-labels; (2) horizontal % makeup per scenario, hard costs in a
+// blue family, soft costs in an orange family.
+function _angledWrapLabel(name, x, y) {
+  var words = String(name).replace(/\s*—\s*/g,' ').split(/\s+/);
+  var lines = [], cur = '';
+  words.forEach(function(w){ if((cur+' '+w).trim().length > 15){ if(cur) lines.push(cur); cur = w; } else cur = (cur?cur+' ':'')+w; });
+  if (cur) lines.push(cur);
+  if (lines.length > 2) lines = [lines[0], lines.slice(1).join(' ')];
+  function esc(s){ return s.replace(/&/g,'&amp;').replace(/</g,'&lt;'); }
+  var s = '<text transform="rotate(-35 '+x+' '+y+')" x="'+x+'" y="'+y+'" text-anchor="end" font-size="9.5" fill="var(--navy)" font-weight="600">';
+  lines.forEach(function(l,i){ s += '<tspan x="'+x+'" dy="'+(i===0?0:10.5)+'">'+esc(l)+'</tspan>'; });
+  s += '</text>';
+  return s;
+}
+function _buildScenarioTotalCostChart() {
+  var scs = S.scenarios || []; if (!scs.length) return '';
+  var data = scs.map(function(sc){ return { name:sc.name, cost:(sc.data&&sc.data.cost?sc.data.cost.projectCost:0) }; });
+  var maxC = Math.max.apply(null, data.map(function(d){return d.cost})); if (!(maxC>0)) maxC = 1;
+  var n = data.length;
+  var W = 560, padL = 50, padR = 14, padT = 40, padB = 104, chartH = 250;
+  var innerW = W - padL - padR, slot = innerW / n, barW = Math.min(56, slot*0.62);
+  var h = '<div class="card" style="margin:0"><div class="card-title">Total Project Cost by Scenario</div>';
+  h += '<div class="card-sub">One bar per scenario — total project cost.</div>';
+  h += '<div style="overflow-x:auto"><svg viewBox="0 0 '+W+' '+(chartH+padT+padB)+'" style="width:100%;font-family:\'IBM Plex Mono\',monospace">';
+  for (var g=0; g<=4; g++){ var yy=padT+chartH-chartH*g/4, vv=maxC*g/4;
+    h += '<line x1="'+padL+'" y1="'+yy+'" x2="'+(W-padR)+'" y2="'+yy+'" stroke="var(--bdr)" stroke-dasharray="3,3"/>';
+    h += '<text x="'+(padL-7)+'" y="'+(yy+3)+'" text-anchor="end" font-size="9" fill="var(--mut)">'+FMM(vv)+'</text>'; }
+  data.forEach(function(d,i){
+    var x = padL + slot*i + slot/2;
+    var bh = (d.cost/maxC)*chartH, y = padT+chartH-bh;
+    h += '<rect x="'+(x-barW/2).toFixed(1)+'" y="'+y.toFixed(1)+'" width="'+barW.toFixed(1)+'" height="'+Math.max(bh,1).toFixed(1)+'" rx="3" fill="#2E4A63"/>';
+    h += '<text x="'+x+'" y="'+(y-9)+'" text-anchor="middle" font-size="15" font-weight="800" fill="var(--navy)">'+FMM(d.cost)+'</text>';
+    h += _angledWrapLabel(d.name, x, padT+chartH+15);
+  });
+  h += '</svg></div></div>';
+  return h;
+}
+function _buildScenarioMakeupChart() {
+  var scs = S.scenarios || []; if (!scs.length) return '';
+  var SEG = [
+    { key:'construction', label:'Construction (fit-out + core & shell + site)', color:'#13314D', fam:'Hard' },
+    { key:'design',       label:'Design Contingency',      color:'#2E5E86', fam:'Hard' },
+    { key:'constr',       label:'Construction Contingency', color:'#5587AE', fam:'Hard' },
+    { key:'esc',          label:'Escalation',              color:'#86AFD0', fam:'Hard' },
+    { key:'tariff',       label:'Tariff',                  color:'#B8D2E8', fam:'Hard' },
+    { key:'services',     label:'Professional Services',   color:'#9C4413', fam:'Soft' },
+    { key:'owner',        label:'Owner Work',              color:'#C56F26', fam:'Soft' },
+    { key:'projcont',     label:'Project Contingency',     color:'#E0944A', fam:'Soft' },
+    { key:'permits',      label:'Permits',                 color:'#EEB87E', fam:'Soft' },
+    { key:'fees',         label:'Project Mgmt Fee',        color:'#F7D9B4', fam:'Soft' }
+  ];
+  function vals(cc){
+    function soft(k){ var x=(cc.softLines||[]).filter(function(s){return s.key===k})[0]; return x?x.amount:0; }
+    return { construction:cc.constructionCost||0, design:cc.designContingency||0, constr:cc.constructionContingency||0,
+             esc:cc.escalationCost||0, tariff:cc.tariffCost||0,
+             services:soft('professionalServices'), owner:soft('ownerWork'), projcont:soft('projectContingency'),
+             permits:soft('permits'), fees:soft('pmFee') };
+  }
+  var h = '<div class="card" style="margin:0"><div class="card-title">Project Cost Makeup by Scenario</div>';
+  h += '<div class="card-sub">Share of total project cost — <span style="color:#13314D;font-weight:700">hard costs</span> (blue) + <span style="color:#9C4413;font-weight:700">soft costs</span> (orange).</div>';
+  h += '<div style="display:flex;flex-direction:column;gap:9px;margin-top:6px">';
+  scs.forEach(function(sc){
+    var cc = (sc.data && sc.data.cost) ? sc.data.cost : {};
+    var v = vals(cc);
+    var tot = cc.projectCost || SEG.reduce(function(a,s){return a+(v[s.key]||0)},0); if (!(tot>0)) tot = 1;
+    var nm = sc.name.replace(/\s*—\s*/,' ');
+    var hardPct = (v.construction+v.design+v.constr+v.esc+v.tariff)/tot*100;
+    h += '<div>';
+    h += '<div style="display:flex;justify-content:space-between;font-size:.72rem;font-weight:700;color:var(--navy);margin-bottom:2px"><span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:70%">'+nm+'</span><span style="color:var(--mut);font-weight:600">'+hardPct.toFixed(0)+'% hard / '+(100-hardPct).toFixed(0)+'% soft</span></div>';
+    h += '<div style="display:flex;height:20px;border-radius:4px;overflow:hidden;border:1px solid var(--bdr)">';
+    SEG.forEach(function(s){ var val=v[s.key]||0; if(val<=0) return; var pct=val/tot*100; h += '<div title="'+s.label+': '+FMM(val)+' ('+pct.toFixed(1)+'%)" style="width:'+pct.toFixed(3)+'%;background:'+s.color+'"></div>'; });
+    h += '</div></div>';
+  });
+  h += '</div>';
+  h += '<div style="display:flex;flex-wrap:wrap;gap:5px 12px;margin-top:12px">';
+  SEG.forEach(function(s){ h += '<div style="display:flex;align-items:center;gap:4px"><span style="width:10px;height:10px;border-radius:2px;background:'+s.color+'"></span><span style="font-size:.71rem;color:var(--navy)">'+s.label+'</span></div>'; });
+  h += '</div></div>';
+  return h;
+}
+function _buildScenarioTopCharts() {
+  if (!S.scenarios || !S.scenarios.length) return '';
+  _recomputeScenarioData();
+  var h = '<div style="display:grid;grid-template-columns:1fr 1fr;gap:18px;align-items:start;margin-bottom:18px">';
+  h += _buildScenarioTotalCostChart();
+  h += _buildScenarioMakeupChart();
+  h += '</div>';
+  return h;
 }
 function renderCostScenarioCharts() {
   var scenarios = S.scenarios;
