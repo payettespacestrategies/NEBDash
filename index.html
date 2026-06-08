@@ -91,6 +91,18 @@ table.comp{width:100%;border-collapse:collapse;font-size:.92rem}
 table.comp th{background:var(--navy);color:#fff;padding:10px 12px;font-weight:700;text-align:left;font-size:.95rem}
 table.comp td{padding:9px 12px;border-bottom:1.5px solid var(--bdr);font-family:'IBM Plex Mono',monospace;font-weight:500;font-size:.92rem}
 table.comp tr:hover{background:#f8f8f5}
+/* v0.8.20: Cost + Scenarios tabs — all .comp tables adopt the Project Breakdown
+   table styling (Roboto, transparent header with grey label + navy underline,
+   thin row rules, tabular numerals). !important overrides per-table inline styles. */
+.cost-roboto table.comp,.scen-pb table.comp{font-family:'Roboto',sans-serif!important}
+.cost-roboto table.comp th,.scen-pb table.comp th{background:transparent!important;color:var(--mut)!important;letter-spacing:.04em;font-size:.7rem!important;font-weight:700!important;border:0!important;border-bottom:2px solid #1B3A5C!important;padding:8px 12px!important}
+.cost-roboto table.comp td,.scen-pb table.comp td{font-family:'Roboto',sans-serif!important;font-variant-numeric:tabular-nums;border-bottom:1px solid var(--bdr)!important;font-weight:400}
+.cost-roboto table.comp tr:hover,.scen-pb table.comp tr:hover{background:#f8f8f5}
+/* v0.8.20: compact Cost Detail table — smaller font, tight padding, small dropdowns. */
+.cost-detail-compact table.comp th,.cost-detail-compact table.comp td{padding:2px 6px!important;font-size:.7rem!important}
+.cost-detail-compact table.comp th{min-width:0!important;line-height:1.1}
+.cost-detail-compact select{font-size:.66rem!important;padding:1px 2px!important;max-width:120px;border-radius:4px}
+.cost-detail-compact input[type=number]{font-size:.66rem!important;padding:1px 3px!important}
 .comp-tight th{padding:5px 6px!important;font-size:.74rem!important;line-height:1.15;text-align:center;letter-spacing:.02em;font-weight:700;text-transform:uppercase;white-space:normal!important}
 .comp-tight td{padding:4px 6px!important;font-size:.82rem!important;vertical-align:middle}
 .comp-tight td input[type="number"]{min-width:62px;width:62px;text-align:right;padding-right:4px}
@@ -943,7 +955,7 @@ function calcCost(totalGSF, totalNASF, piNASF, coreNASF, commNASF, eventNASF, su
     officeNASF    += t.groupOffice * t.pis;
     piOfficeNASF  += t.groupOffice * t.pis;
     piWriteupNASF += t.groupDesk   * t.pis;
-    progLines.push({ cat:t.label, nasf:labNASF, dgsf:typeGFA, rate:rate, cost:typeGFA*rate, group:'research', color:t.color, mapType:'type', mapKey:t.id });
+    progLines.push({ cat:t.label, nasf:labNASF, dgsf:typeGFA, rate:rate, cost:typeGFA*rate, group:'research', color:t.color, mapType:'type', mapKey:t.id, pis:t.pis });
   });
   // Office (faculty + flex) and Write-Up (desk) pulled out of the typologies and
   // costed at their own (lower) menu rates — these are cheaper than wet/dry labs.
@@ -3258,9 +3270,15 @@ function _benchSelect(mapType, key, currentRate) {
   // value in the custom option so the dropdown always reflects the rate.
   var customLabel = selKey ? '— custom —' : ('— custom · $'+F(Math.round(+currentRate || 0))+' —');
   opts = '<option value=""'+(selKey ? '' : ' selected')+'>'+customLabel+'</option>' + opts;
-  return '<select onchange="_setBenchRate(\''+mapType+'\',\''+key+'\',this.value)" '
+  // v0.8.21: hidden by default — the $/DGSF number toggles it (see _toggleBench).
+  return '<select class="bench-sel" onchange="_setBenchRate(\''+mapType+'\',\''+key+'\',this.value)" '
        + 'title="Map to NWU benchmark typology (Q4 2025 $/SF)" '
-       + 'style="margin-top:3px;font-size:.72rem;padding:2px 3px;max-width:165px;color:var(--navy)">'+opts+'</select>';
+       + 'style="display:none;margin-top:3px;font-size:.72rem;padding:2px 3px;max-width:165px;color:var(--navy)">'+opts+'</select>';
+}
+// v0.8.21: show/hide the benchmark dropdown when its $/DGSF number is clicked.
+function _toggleBench(el) {
+  var s = el.parentNode.querySelector('select.bench-sel');
+  if (s) s.style.display = (s.style.display === 'none' || !s.style.display) ? 'inline-block' : 'none';
 }
 // v0.8.1: the Fitout Rate Menu IS window.BENCH_RATES — a single static list,
 // shared across all scenarios (loadScenario never touches window globals), that
@@ -3335,17 +3353,20 @@ function renderCost(d) {
   // orientation. Pro Rata Circ + Bldg Support are signaled with colored
   // TEXT only — no per-cell backgrounds.
   // Palette: see colors/cost_palette.json (Cream, Peach, Blush, Sage, Stone)
-  var clrNASF       = 'var(--navy)';
-  var clrCirc       = '#B07A2A';   // muted caramel — text only
-  var clrBS         = '#5A5F66';   // dark stone — text only
-  var clrSubBg      = '#EFF1EB';   // very subtle sage wash for subtotals
-  var clrTotalBg    = '#E8D4C6';   // blush — Fitout Total + Base Construction
-  var clrSectionBg  = '#F4F0EC';   // soft cream for section bands
-  var clrHeadBg     = '#F0EAE3';   // soft sand for header row
-  var clrRule       = '#B7BCBF';   // stone for thin rules
-  var numStyle      = "font-family:'IBM Plex Mono','SF Mono',Consolas,monospace;font-variant-numeric:tabular-nums;font-weight:600;text-align:center;letter-spacing:0";
-  var labelStyle    = "font-family:'Sora','Helvetica Neue',Arial,sans-serif;font-weight:600";
-  var sectionStyle  = "font-family:'Sora','Helvetica Neue',Arial,sans-serif;font-weight:800;color:var(--navy);font-size:.78rem;text-transform:uppercase;letter-spacing:.08em;background:"+clrSectionBg+";padding:8px 10px;border-top:1px solid "+clrRule+";border-bottom:1px solid "+clrRule;
+  // v0.8.20: Cost Detail recolored to match the Project Breakdown table —
+  // navy values, grey secondary text, no banding fills, navy section/total rules.
+  var clrNASF       = '#185FA5';   // blue tone (matches Project Breakdown)
+  var clrCirc       = '#5A5F66';   // grey (was caramel)
+  var clrBS         = '#5A5F66';   // grey
+  var clrSubBg      = 'transparent';
+  var clrTotalBg    = 'transparent';
+  var clrSectionBg  = 'transparent';
+  var clrHeadBg     = 'transparent';
+  var clrRule       = '#1B3A5C';   // navy rules
+  var RBT = "font-family:'Roboto',sans-serif;";
+  var numStyle      = RBT+"font-variant-numeric:tabular-nums;font-weight:400;text-align:right;letter-spacing:0";
+  var labelStyle    = RBT+"font-weight:400";
+  var sectionStyle  = RBT+"font-weight:700;color:var(--navy);font-size:.7rem;text-transform:uppercase;letter-spacing:.05em;background:transparent;padding:6px 8px;border-top:1.5px solid #1B3A5C";
 
   var fsCS    = (S.floorStacking || {});
   var circPct = (fsCS.circulation_pct_global != null) ? fsCS.circulation_pct_global : 0.18;
@@ -3370,22 +3391,23 @@ function renderCost(d) {
 
   // v0.7: Cost Detail is full-width; the cost composition renders as a
   // horizontal bar below it (single-column grid stacks them).
-  h += '<div class="cost-top-grid" style="display:grid;grid-template-columns:1fr;gap:12px;align-items:stretch;margin-bottom:12px">';
-  h += '<div class="card"><div class="card-title">Cost Detail</div>';
+  h += '<div class="cost-top-grid" style="display:grid;grid-template-columns:2fr 1fr;gap:12px;align-items:start;margin-bottom:12px">';
+  h += '<div class="card" style="min-width:0"><div class="card-title">Cost Detail</div>';
   h += '<div class="card-sub">DGSF = NASF + pro-rata circulation. GSF = DGSF + pro-rata building support. Circulation '+(circPct*100).toFixed(0)+'% and Building Support '+(bsPct*100).toFixed(0)+'% (of GSF) come from the Floor Stacking sliders. Core &amp; Shell + Site &amp; Demo are applied to total GSF; Fitout Cost = DGSF × $/DGSF rate.</div>';
-  h += '<div style="overflow-x:auto">';
-  h += '<table class="comp" style="background:transparent">';
+  h += '<div class="cost-detail-compact" style="overflow-x:auto">';
+  h += '<table class="comp" style="background:transparent;font-family:\'Roboto\',sans-serif">';
   h += '<thead>';
   h += '<tr>';
-  h += '<th style="min-width:220px;background:'+clrHeadBg+';color:var(--navy);text-transform:uppercase;letter-spacing:.05em;font-size:.78rem;text-align:left;border-bottom:1px solid '+clrRule+'">Program Category</th>';
-  h += '<th style="background:'+clrHeadBg+';color:var(--navy);text-transform:uppercase;letter-spacing:.05em;font-size:.78rem;text-align:center;border-bottom:1px solid '+clrRule+'">NASF</th>';
-  h += '<th style="background:'+clrHeadBg+';color:var(--navy);text-transform:uppercase;letter-spacing:.05em;font-size:.78rem;text-align:center;border-bottom:1px solid '+clrRule+'">% Total</th>';
-  h += '<th style="background:'+clrHeadBg+';color:'+clrCirc+';text-transform:uppercase;letter-spacing:.05em;font-size:.78rem;text-align:center;border-bottom:1px solid '+clrRule+'">Pro Rata Circ</th>';
-  h += '<th style="background:'+clrHeadBg+';color:var(--navy);text-transform:uppercase;letter-spacing:.05em;font-size:.78rem;text-align:center;border-bottom:1px solid '+clrRule+'">DGSF</th>';
-  h += '<th style="background:'+clrHeadBg+';color:var(--navy);text-transform:uppercase;letter-spacing:.05em;font-size:.78rem;text-align:center;border-bottom:1px solid '+clrRule+'">$/DGSF</th>';
-  h += '<th style="background:'+clrHeadBg+';color:var(--navy);text-transform:uppercase;letter-spacing:.05em;font-size:.78rem;text-align:center;border-bottom:1px solid '+clrRule+'">Cost</th>';
-  h += '<th style="background:'+clrHeadBg+';color:'+clrBS+';text-transform:uppercase;letter-spacing:.05em;font-size:.78rem;text-align:center;border-bottom:1px solid '+clrRule+'">Bldg Sup</th>';
-  h += '<th style="background:'+clrHeadBg+';color:'+clrBS+';text-transform:uppercase;letter-spacing:.05em;font-size:.78rem;text-align:center;border-bottom:1px solid '+clrRule+'">GSF</th>';
+  var _th = "font-family:'Roboto',sans-serif;background:transparent;color:var(--mut);text-transform:uppercase;letter-spacing:.05em;font-size:.7rem;font-weight:700;border:0;border-bottom:2px solid #1B3A5C";
+  h += '<th style="min-width:140px;'+_th+';text-align:left">Program Category</th>';
+  h += '<th style="'+_th+';text-align:right">PIs</th>';
+  h += '<th style="'+_th+';text-align:right">NASF</th>';
+  h += '<th style="'+_th+';text-align:right">% Total</th>';
+  h += '<th style="'+_th+';text-align:right">Pro Rata Circ</th>';
+  h += '<th style="'+_th+';text-align:right">DGSF</th>';
+  h += '<th style="'+_th+';text-align:center">$/DGSF</th>';
+  h += '<th style="'+_th+';text-align:right">Cost</th>';
+  h += '<th style="'+_th+';text-align:right">GSF</th>';
   h += '</tr>';
   h += '</thead>';
   h += '<tbody>';
@@ -3398,44 +3420,44 @@ function renderCost(d) {
     var pad = opts.indent ? 'style="padding-left:18px;'+labelStyle+'"' : 'style="'+labelStyle+'"';
     var row = '<tr>';
     row += '<td '+pad+'>'+dot+p.cat+'</td>';
+    row += '<td style="'+numStyle+';color:#5A5F66">'+(p.pis != null ? F(p.pis) : '')+'</td>';
     row += '<td style="'+numStyle+';color:'+clrNASF+'">'+F(p.nasf)+'</td>';
     row += '<td style="'+numStyle+';color:#5A5F66;font-weight:500">'+_fmtPct(e.pctOfTotal)+'</td>';
     row += '<td style="'+numStyle+';color:'+clrCirc+'">'+F(e.proRataCirc)+'</td>';
     row += '<td style="'+numStyle+';color:'+clrNASF+'">'+F(e.dgsfNew)+'</td>';
-    // v0.7: $/DGSF cell — value centered above the benchmark mapping dropdown.
-    row += '<td style="text-align:center"><div style="'+numStyle+';color:'+clrNASF+'">$'+F(e.rateDGSF)+'</div>'
+    // v0.7: $/DGSF cell — value above the (hidden) benchmark dropdown; click to reveal.
+    row += '<td style="text-align:center"><div onclick="_toggleBench(this)" title="Click to map a benchmark rate" style="'+numStyle+';color:'+clrNASF+';cursor:pointer">$'+F(e.rateDGSF)+'</div>'
          + (p.mapType ? _benchSelect(p.mapType, p.mapKey, p.rate) : '') + '</td>';
     row += '<td style="'+numStyle+';color:'+clrNASF+'">'+FMM(e.fitoutCost)+'</td>';
-    row += '<td style="'+numStyle+';color:'+clrBS+'">'+F(e.bldgSup)+'</td>';
     row += '<td style="'+numStyle+';color:'+clrBS+'">'+F(e.gfaNew)+'</td>';
     row += '</tr>';
     return row;
   }
   function _subtotal(label, rows) {
-    var sNASF=0, sCirc=0, sDGSF=0, sBS=0, sGFA=0, sCost=0;
-    rows.forEach(function(p){ var e=p._calc; sNASF+=p.nasf; sCirc+=e.proRataCirc; sDGSF+=e.dgsfNew; sBS+=e.bldgSup; sGFA+=e.gfaNew; sCost+=e.fitoutCost; });
+    var sPIs=0, sNASF=0, sCirc=0, sDGSF=0, sGFA=0, sCost=0;
+    rows.forEach(function(p){ var e=p._calc; sPIs+=(p.pis||0); sNASF+=p.nasf; sCirc+=e.proRataCirc; sDGSF+=e.dgsfNew; sGFA+=e.gfaNew; sCost+=e.fitoutCost; });
     var pctTot = sumProgNASF>0 ? (sNASF/sumProgNASF*100).toFixed(1)+'%' : '—';
-    return '<tr style="background:'+clrSubBg+'">'
+    return '<tr style="border-top:1px solid '+clrRule+'">'
       + '<td style="padding-left:18px;'+labelStyle+';font-weight:700">'+label+'</td>'
+      + '<td style="'+numStyle+';color:#5A5F66;font-weight:700">'+(sPIs>0?F(sPIs):'')+'</td>'
       + '<td style="'+numStyle+';color:'+clrNASF+';font-weight:700">'+F(sNASF)+'</td>'
       + '<td style="'+numStyle+';color:#5A5F66;font-weight:600">'+pctTot+'</td>'
       + '<td style="'+numStyle+';color:'+clrCirc+';font-weight:700">'+F(sCirc)+'</td>'
       + '<td style="'+numStyle+';color:'+clrNASF+';font-weight:700">'+F(sDGSF)+'</td>'
       + '<td></td>'
       + '<td style="'+numStyle+';color:'+clrNASF+';font-weight:700">'+FMM(sCost)+'</td>'
-      + '<td style="'+numStyle+';color:'+clrBS+';font-weight:700">'+F(sBS)+'</td>'
       + '<td style="'+numStyle+';color:'+clrBS+';font-weight:700">'+F(sGFA)+'</td>'
       + '</tr>';
   }
   function _gsfRow(label, rate, total, mapKey) {
     return '<tr>'
-      + '<td style="'+labelStyle+'">'+label+'</td>'
-      + '<td colspan="2" style="'+numStyle+';color:#5A5F66;font-weight:500">'+F(d.totalGSF)+' GSF</td>'
-      + '<td colspan="2"></td>'
-      + '<td style="text-align:center"><div style="'+numStyle+';color:'+clrNASF+'">$'+F(rate)+'/GSF</div>'
+      + '<td style="padding-left:18px;'+labelStyle+'">'+label+'</td>'
+      + '<td></td>'
+      + '<td colspan="4" style="'+numStyle+';color:#5A5F66;font-weight:500">'+F(d.totalGSF)+' GSF</td>'
+      + '<td style="text-align:center"><div onclick="_toggleBench(this)" title="Click to map a benchmark rate" style="'+numStyle+';color:'+clrNASF+';cursor:pointer">$'+F(rate)+'/GSF</div>'
         + (mapKey ? _benchSelect('direct', mapKey, rate) : '') + '</td>'
       + '<td style="'+numStyle+';color:'+clrNASF+'">'+FMM(total)+'</td>'
-      + '<td colspan="2" style="'+numStyle+';color:#5A5F66;font-weight:500">'+F(d.totalGSF)+' GSF</td>'
+      + '<td style="'+numStyle+';color:#5A5F66;font-weight:500">'+F(d.totalGSF)+'</td>'
       + '</tr>';
   }
   function _section(label) {
@@ -3443,15 +3465,15 @@ function renderCost(d) {
   }
 
   // ---- 1. CORE & SHELL + SITE (top, applied against total GSF) -----
-  h += _section('Core & Shell + Site (applied to total GSF)');
+  h += _section('Core & Shell + Site');
   h += _gsfRow('Core &amp; Shell', S.cost.coreShellRate, cs.totalCoreShell, 'coreShellRate');
   h += _gsfRow('Site &amp; Demo',   S.cost.siteRate,      cs.totalSite,      'siteRate');
   var shellSiteTotal = cs.totalCoreShell + cs.totalSite;
-  h += '<tr style="background:'+clrSubBg+'">'
+  h += '<tr style="border-top:1px solid '+clrRule+'">'
     + '<td style="padding-left:18px;'+labelStyle+';font-weight:700">Subtotal: Core &amp; Shell + Site</td>'
-    + '<td colspan="5"></td>'
+    + '<td colspan="6"></td>'
     + '<td style="'+numStyle+';color:'+clrNASF+';font-weight:700">'+FMM(shellSiteTotal)+'</td>'
-    + '<td colspan="2"></td>'
+    + '<td></td>'
     + '</tr>';
 
   // ---- 2. FITOUT (per-program, against DGSF) -----------------------
@@ -3459,79 +3481,69 @@ function renderCost(d) {
   var coreLines   = cs.progLines.filter(function(p){return p.group==='core'});
   var otherLines  = cs.progLines.filter(function(p){return p.group==='other'});
   var unallocLines= cs.progLines.filter(function(p){return p.group==='unalloc'});
-  h += _section('Program Fitout (DGSF × $/DGSF)');
+  h += '<tr><td colspan="9" style="height:12px;border-top:1.5px solid #1B3A5C"></td></tr>';
 
   if (resLines.length > 0) {
     h += '<tr><td colspan="9" style="'+labelStyle+';font-weight:700;color:#5A5F66;font-size:.74rem;text-transform:uppercase;letter-spacing:.05em;padding:6px 10px">Research — PI Typologies</td></tr>';
-    resLines.forEach(function(p){ h += _row(p, {dot:true}); });
+    resLines.forEach(function(p){ h += _row(p, {dot:true, indent:true}); });
     h += _subtotal('Subtotal: PI Typologies', resLines);
   }
   if (coreLines.length > 0) {
-    h += '<tr><td colspan="9" style="'+labelStyle+';font-weight:700;color:#5A5F66;font-size:.74rem;text-transform:uppercase;letter-spacing:.05em;padding:6px 10px">Shared Facilities</td></tr>';
+    h += '<tr><td colspan="9" style="'+labelStyle+';font-weight:700;color:#5A5F66;font-size:.74rem;text-transform:uppercase;letter-spacing:.05em;padding:6px 10px">Shared Lab Facilities</td></tr>';
     coreLines.forEach(function(p){ h += _row(p, {indent:true}); });
-    h += _subtotal('Subtotal: Shared Facilities', coreLines);
+    h += _subtotal('Subtotal: Shared Lab Facilities', coreLines);
   }
   if (otherLines.length > 0) {
     h += '<tr><td colspan="9" style="'+labelStyle+';font-weight:700;color:#5A5F66;font-size:.74rem;text-transform:uppercase;letter-spacing:.05em;padding:6px 10px">Non-Research Program</td></tr>';
-    otherLines.forEach(function(p){ h += _row(p); });
+    otherLines.forEach(function(p){ h += _row(p, {indent:true}); });
     h += _subtotal('Subtotal: Non-Research Program', otherLines);
   }
   if (unallocLines.length > 0) {
     h += '<tr><td colspan="9" style="'+labelStyle+';font-weight:700;color:#5A5F66;font-size:.74rem;text-transform:uppercase;letter-spacing:.05em;padding:6px 10px">Unallocated — Warm Shell</td></tr>';
-    unallocLines.forEach(function(p){ h += _row(p); });
+    unallocLines.forEach(function(p){ h += _row(p, {indent:true}); });
   }
 
-  // Fitout total — primary row, blush highlight
-  var sumNASFAll=0, sumCircAll=0, sumDGSFAll=0, sumBSAll=0, sumGFAAll=0;
-  cs.progLines.forEach(function(p){ var e=p._calc; sumNASFAll+=p.nasf; sumCircAll+=e.proRataCirc; sumDGSFAll+=e.dgsfNew; sumBSAll+=e.bldgSup; sumGFAAll+=e.gfaNew; });
-  h += '<tr style="background:'+clrTotalBg+';border-top:2px solid '+clrRule+'">'
+  // Fitout total — primary row
+  var sumPIsAll=0, sumNASFAll=0, sumCircAll=0, sumDGSFAll=0, sumGFAAll=0;
+  cs.progLines.forEach(function(p){ var e=p._calc; sumPIsAll+=(p.pis||0); sumNASFAll+=p.nasf; sumCircAll+=e.proRataCirc; sumDGSFAll+=e.dgsfNew; sumGFAAll+=e.gfaNew; });
+  h += '<tr style="border-top:1.5px solid #1B3A5C">'
     + '<td style="'+labelStyle+';font-weight:800">Fitout Total</td>'
+    + '<td style="'+numStyle+';font-weight:800;color:#5A5F66">'+(sumPIsAll>0?F(sumPIsAll):'')+'</td>'
     + '<td style="'+numStyle+';font-weight:800;color:'+clrNASF+'">'+F(sumNASFAll)+'</td>'
     + '<td style="'+numStyle+';font-weight:700;color:#5A5F66">100%</td>'
     + '<td style="'+numStyle+';font-weight:800;color:'+clrCirc+'">'+F(sumCircAll)+'</td>'
     + '<td style="'+numStyle+';font-weight:800;color:'+clrNASF+'">'+F(sumDGSFAll)+'</td>'
     + '<td></td>'
     + '<td style="'+numStyle+';font-weight:800;color:'+clrNASF+'">'+FMM(totalNewFitout)+'</td>'
-    + '<td style="'+numStyle+';font-weight:800;color:'+clrBS+'">'+F(sumBSAll)+'</td>'
     + '<td style="'+numStyle+';font-weight:800;color:'+clrBS+'">'+F(sumGFAAll)+'</td>'
     + '</tr>';
 
   // ---- 3. BASE CONSTRUCTION (sum of all) — primary row, blush -----
   var newConstructionCost = totalNewFitout + cs.totalCoreShell + cs.totalSite;
-  h += '<tr style="background:'+clrTotalBg+';border-top:3px solid var(--navy)">'
+  h += '<tr style="border-top:2px solid #1B3A5C">'
     + '<td style="'+labelStyle+';font-weight:900;font-size:1.02rem">Base Construction (Q'+S.cost.baseQuarter+' '+S.cost.baseYear+')</td>'
-    + '<td colspan="2" style="'+numStyle+';color:#5A5F66;font-weight:600">'+F(d.totalGSF)+' GSF</td>'
+    + '<td colspan="3" style="'+numStyle+';color:#5A5F66;font-weight:600">'+F(d.totalGSF)+' GSF</td>'
     + '<td colspan="3" style="'+numStyle+';color:'+clrNASF+';font-weight:800">$'+F(Math.round(newConstructionCost/d.totalGSF))+'/GSF</td>'
     + '<td style="'+numStyle+';font-weight:900;font-size:1.02rem;color:'+clrNASF+'">'+FMM(newConstructionCost)+'</td>'
-    + '<td colspan="2"></td>'
+    + '<td></td>'
     + '</tr>';
   h += '</tbody></table></div></div>';
 
-  // ── Cost Composition (horizontal stacked bar, full width below the table) ──
-  h += _skillBuildCostCompositionBar(d, cs);
-  // ── Construction Cost by FICM Category (driven by the rate-menu Category) ──
-  h += _buildCostByCategoryCard(d);
-  h += '</div>'; // close .cost-top-grid
-
-
-  h += '<div class="g2">';
-
-  // LEFT COLUMN: Rate controls — Fitout first.
-  h += '<div>';
-
+  // v0.8.22: Fitout Rate Menu is the right (1/3) column beside Cost Detail (2/3).
   // ── FITOUT RATES (editable table, wired to the Cost Detail dropdowns) ──
   // v0.7.1: sliders replaced by a simple editable table — a $/SF number field
   // plus the same benchmark-typology dropdown used in the Cost Detail table.
   // Both write the same S.cost rate fields, so editing a value or remapping a
   // category here updates the dropdown, the Cost Detail, and the cost math.
-  h += '<div class="card"><div class="card-title">Fitout Rate Menu ($/SF)</div>';
-  h += '<div class="card-sub" style="margin-bottom:6px">The single menu every Cost Detail dropdown pulls from &mdash; same across all scenarios. <strong>Category</strong> colors the cost lines by FICM group (drives the Cost-by-Category chart). Add/delete rows to curate.</div>';
-  h += '<div style="overflow-x:auto"><table class="comp" style="background:transparent;font-size:.82rem">';
+  h += '<div class="card" style="min-width:0"><div class="card-title">Fitout Rate Menu ($/SF)</div>';
+  h += '<div class="card-sub" style="margin-bottom:6px">The single menu every Cost Detail dropdown pulls from &mdash; same across all scenarios. Add/delete rows to curate.</div>';
+  h += '<div class="cost-detail-compact" style="overflow-x:auto"><table class="comp" style="background:transparent;font-family:\'Roboto\',sans-serif;font-size:.82rem">';
+  var _thM = "font-family:'Roboto',sans-serif;background:transparent;color:var(--mut);text-transform:uppercase;letter-spacing:.04em;font-size:.66rem;font-weight:700;padding:4px 6px;border:0;border-bottom:2px solid #1B3A5C";
   h += '<thead><tr>'
-    +  '<th style="background:#F0EAE3;color:var(--navy);text-transform:uppercase;letter-spacing:.04em;font-size:.66rem;text-align:left;padding:4px 6px;border-bottom:1px solid #B7BCBF">Rate Name</th>'
-    +  '<th style="background:#F0EAE3;color:var(--navy);text-transform:uppercase;letter-spacing:.04em;font-size:.66rem;text-align:left;padding:4px 6px;border-bottom:1px solid #B7BCBF">Category</th>'
-    +  '<th style="background:#F0EAE3;color:var(--navy);text-transform:uppercase;letter-spacing:.04em;font-size:.66rem;text-align:center;width:74px;padding:4px 6px;border-bottom:1px solid #B7BCBF">$/SF</th>'
-    +  '<th style="background:#F0EAE3;width:24px;border-bottom:1px solid #B7BCBF"></th>'
+    +  '<th style="'+_thM+';text-align:left">Rate Name</th>'
+    +  '<th style="'+_thM+';text-align:left">Category</th>'
+    +  '<th style="'+_thM+';text-align:right;width:64px">$/SF</th>'
+    +  '<th style="'+_thM+';width:20px"></th>'
     +  '</tr></thead><tbody>';
   (window.BENCH_RATES || []).forEach(function(b){
     var k = String(b.key).replace(/\\/g,'\\\\').replace(/'/g,"\\'");
@@ -3539,23 +3551,25 @@ function renderCost(d) {
     var cat = b.cat || 'research';
     var catOpts = (window.RATE_CATS||[]).map(function(rc){ return '<option value="'+rc.id+'"'+(rc.id===cat?' selected':'')+'>'+rc.label+'</option>'; }).join('');
     h += '<tr>'
-      + '<td style="padding:2px 6px"><input type="text" value="'+lbl+'" onchange="setMenuLabel(\''+k+'\',this.value)" style="width:99%;font-family:\'Sora\',sans-serif;font-weight:600;font-size:.82rem;color:var(--navy);padding:3px 6px;border:1px solid var(--bdr);border-radius:5px"></td>'
+      + '<td style="padding:2px 6px"><input type="text" value="'+lbl+'" onchange="setMenuLabel(\''+k+'\',this.value)" style="width:99%;font-family:\'Roboto\',sans-serif;font-weight:500;font-size:.82rem;color:var(--navy);padding:3px 6px;border:1px solid var(--bdr);border-radius:5px"></td>'
       + '<td style="padding:2px 6px;white-space:nowrap"><span style="display:inline-block;width:9px;height:9px;border-radius:2px;background:'+_rateCatColor(cat)+';margin-right:5px;vertical-align:middle"></span>'
-      +   '<select onchange="setMenuCategory(\''+k+'\',this.value)" style="font-size:.76rem;padding:2px 3px;border:1px solid var(--bdr);border-radius:5px;color:var(--navy)">'+catOpts+'</select></td>'
-      + '<td style="text-align:center;padding:2px 6px"><input type="number" min="0" step="10" value="'+b.rate+'" onchange="setMenuRate(\''+k+'\',this.value)" style="width:60px;font-family:\'IBM Plex Mono\',monospace;font-weight:700;font-size:.82rem;text-align:right;color:var(--navy);padding:3px 5px;border:1px solid var(--bdr);border-radius:5px"></td>'
+      +   '<select onchange="setMenuCategory(\''+k+'\',this.value)" style="font-family:\'Roboto\',sans-serif;font-size:.76rem;padding:2px 3px;border:1px solid var(--bdr);border-radius:5px;color:var(--navy)">'+catOpts+'</select></td>'
+      + '<td style="text-align:right;padding:2px 6px"><input type="number" min="0" step="10" value="'+b.rate+'" onchange="setMenuRate(\''+k+'\',this.value)" style="width:58px;font-family:\'Roboto\',sans-serif;font-variant-numeric:tabular-nums;font-weight:700;font-size:.82rem;text-align:right;color:var(--navy);padding:3px 5px;border:1px solid var(--bdr);border-radius:5px"></td>'
       + '<td style="text-align:center;padding:2px 3px"><button onclick="deleteMenuRow(\''+k+'\')" title="Delete this rate" style="border:none;background:transparent;color:#B0410E;font-size:1rem;line-height:1;cursor:pointer;font-weight:700">&times;</button></td>'
       + '</tr>';
   });
   h += '</tbody></table></div>';
   h += '<div style="margin-top:7px"><button class="btn btn-sm btn-navy" onclick="addMenuRow()">+ Add rate</button></div>';
-  h += '<div style="background:#E8D4C6;font-family:\'Sora\',sans-serif;font-weight:800;font-size:.92rem;padding:7px 10px;margin-top:8px;border-top:2px solid #B7BCBF;text-align:right;color:var(--navy)">Fitout Total: '+FMM(cs.totalFitout)+'</div>';
-  h += '</div>';
+  h += '<div style="font-family:\'Roboto\',sans-serif;font-weight:900;font-size:.92rem;padding:8px 6px;margin-top:8px;border-top:2px solid #1B3A5C;text-align:right;color:var(--navy)">Fitout Total: '+FMM(cs.totalFitout)+'</div>';
+  h += '</div>'; // close Fitout Rate Menu card
+  h += '</div>'; // close .cost-top-grid (Cost Detail 2/3 | Fitout Rate Menu 1/3)
+  // Cost Composition — horizontal stacked bar, full width below the row.
+  h += _skillBuildCostCompositionBar(d, cs);
 
-  h += '</div>'; // close left col
-
-  // RIGHT COLUMN: Core & Shell + Site at top, then Escalation, Tariff,
-  // Soft Costs, Waterfall.
-  h += '<div>';
+  // v0.8.20: Project Cost Buildup sits on the RIGHT; Core & Shell + Site and
+  // Escalation & Tariff are stacked in the LEFT column beside it.
+  h += '<div class="g2">';
+  h += '<div>'; // LEFT column: input cards
 
   // Core & Shell + Site — applied to total GSF, separate from per-program fitout.
   h += '<div class="card"><div class="card-title">Core &amp; Shell + Site</div>';
@@ -3613,6 +3627,8 @@ function renderCost(d) {
   h += '<div style="font-size:.82rem;color:#5A5F66;text-align:right;margin-top:2px">Tariff premium: '+FMM(cs.tariffCost)+'</div>';
   h += '</div>';
 
+  h += '</div>'; // close LEFT input column
+  h += '<div>'; // RIGHT column: Project Cost Buildup
   h += '<div class="card"><div class="card-title">Project Cost Buildup</div>';
   h += '<div class="card-sub">Each markup is a share of total project cost, per the Northwestern Project Budget Breakdown (June 2026). Total = base construction \u00f7 (1 \u2212 \u03a3 markups). Every percentage is editable.</div>';
   h += _ladder('Base Construction (Q'+S.cost.baseQuarter+' '+S.cost.baseYear+') \u00b7 '+_pctOfProj(cs.constructionCost).toFixed(0)+'%', cs.constructionCost, {rule:true});
@@ -4443,7 +4459,7 @@ function setLabBudget(val) {
 // TAB 8: SCENARIOS
 // ============================================================
 function renderScenarios(d) {
-  var h = '';
+  var h = '<div class="scen-pb">'; // v0.8.20: scope Project-Breakdown table styling
   // v0.8.2: refresh each scenario's cost/area snapshot against the current rate
   // menu + inputs so the comparison cards/table/chart reflect live edits.
   if (typeof _recomputeScenarioData === 'function') _recomputeScenarioData();
@@ -4470,7 +4486,7 @@ function renderScenarios(d) {
 
   if (S.scenarios.length === 0) {
     h += '<div class="card" style="text-align:center;padding:40px"><div style="font-size:1.3rem;color:var(--mut)">No scenarios saved yet</div><div style="font-size:.9rem;color:var(--mut);margin-top:6px">Adjust assumptions in Tabs 1\u20136, then save here</div></div>';
-    return h;
+    return h + '</div>';
   }
 
   // ── SCENARIO CARDS ──
@@ -4553,18 +4569,15 @@ function renderScenarios(d) {
   // ── BUILDING POPULATION TABLE (standalone, screenshot-ready) ──
   h += renderPopulationTable();
 
-  // Comparison bar chart (FICM colors)
-  h += '<div class="card"><div class="card-title">NASF Allocation Comparison</div>';
-  h += renderComparisonChart();
+  // v0.8.20: three-across row — NSF by Typology table | Research Lab Mix
+  // Comparison | NASF Allocation Comparison (each ~1/3 page width).
+  h += '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;align-items:stretch;margin-top:12px">';
+  h += '<div class="card" style="min-width:0"><div class="card-title">NSF by Typology</div>'+renderLabMixSFTable()+'</div>';
+  h += '<div class="card" style="min-width:0"><div class="card-title">Research Mix</div>'+renderLabMixChart()+'</div>';
+  h += '<div class="card" style="min-width:0"><div class="card-title">Space Mix</div>'+renderComparisonChart()+'</div>';
   h += '</div>';
 
-  // v0.5.56: Lab mix chart + NSF-by-typology table side-by-side.
-  h += '<div style="display:flex;gap:14px;align-items:stretch;flex-wrap:wrap">';
-  h += '<div class="card" style="flex:1 1 520px;min-width:0"><div class="card-title">Research Lab Mix Comparison</div>'+renderLabMixChart()+'</div>';
-  h += '<div class="card" style="flex:0 1 340px;min-width:280px"><div class="card-title">NSF by Typology</div>'+renderLabMixSFTable()+'</div>';
-  h += '</div>';
-
-  return h;
+  return h + '</div>';
 }
 
 function saveScenario() {
@@ -4777,9 +4790,25 @@ function calcPopulation(sc) {
   return { pis:pis, postdocs:postdocs, grads:grads, staff:staff, total:pis+postdocs+grads+staff };
 }
 
+function _vBarCard(title, items, fmt){
+  if(!items||!items.length) return '';
+  var n=items.length, max=Math.max.apply(null, items.map(function(x){return x.value;}))||1;
+  var slot=Math.max(30, Math.min(60, 320/n)), W=Math.max(150, n*slot+16), padT=22, padB=28, chartH=160, H=padT+chartH+padB;
+  var svg='<svg viewBox="0 0 '+W+' '+H+'" style="width:100%;font-family:Roboto,sans-serif">';
+  items.forEach(function(it,i){
+    var bw=Math.min(34, slot*0.6), x=8+i*slot+(slot-bw)/2, bh=it.value/max*chartH, y=padT+chartH-bh;
+    var on=(i===S.activeScenario);
+    svg+='<rect x="'+x.toFixed(1)+'" y="'+y.toFixed(1)+'" width="'+bw.toFixed(1)+'" height="'+Math.max(1,bh).toFixed(1)+'" rx="2" fill="'+(on?'#1B3A5C':'#8FB4D8')+'" style="cursor:pointer" onclick="selectScenario('+i+');render()"><title>'+items[i].label+': '+fmt(it.value)+'</title></rect>';
+    svg+='<text x="'+(x+bw/2).toFixed(1)+'" y="'+(y-4).toFixed(1)+'" text-anchor="middle" font-size="9" font-weight="700" fill="#1B3A5C">'+fmt(it.value)+'</text>';
+    svg+='<text x="'+(x+bw/2).toFixed(1)+'" y="'+(padT+chartH+13)+'" text-anchor="middle" font-size="9" fill="#5A5F66">'+String(items[i].label).substring(0,3)+'</text>';
+  });
+  svg+='</svg>';
+  return '<div class="card" style="min-width:0"><div class="card-title">'+title+'</div>'+svg+'</div>';
+}
 function renderPopulationTable() {
   if (S.scenarios.length === 0) return '';
-  var h = '<div class="card"><div class="card-title">Building Population Sensitivity</div>';
+  var h = '<div style="display:grid;grid-template-columns:2fr 1fr;gap:14px;align-items:start">';
+  h += '<div class="card" style="min-width:0"><div class="card-title">Building Population</div>';
   h += '<div class="card-sub">Estimated building population by role. Group sizes drive total headcount \u2014 a key variable for circulation, amenities, and building services.</div>';
   h += '<div style="overflow-x:auto">';
   h += '<table class="comp">';
@@ -4840,41 +4869,10 @@ function renderPopulationTable() {
   h += '</td></tr>';
 
   h += '</table></div>';
-
-  // Visual: population bars
-  h += '<div style="margin-top:16px">';
-  var maxTotal = Math.max.apply(null, totals);
-  S.scenarios.forEach(function(sc, i) {
-    var pop = pops[i];
-    var pctBar = maxTotal > 0 ? (pop.total / maxTotal * 100) : 0;
-    var isActive = i === S.activeScenario;
-    h += '<div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">';
-    h += '<div style="min-width:200px;font-size:.82rem;font-weight:'+(isActive?'800':'600')+';color:var(--navy);text-align:right">'+sc.name.replace(/^\d+ \u2014 /,'')+'</div>';
-    h += '<div style="flex:1;height:28px;background:#eee;border-radius:6px;overflow:hidden;display:flex">';
-    // Stacked: PIs, Postdocs, Grads, Staff
-    var cats = [
-      { n:pop.pis, c:'var(--navy)', l:'PIs' },
-      { n:pop.postdocs, c:'var(--teal)', l:'Postdocs' },
-      { n:pop.grads, c:'var(--peri)', l:'Grads' },
-      { n:pop.staff, c:'var(--coral)', l:'Staff' },
-    ];
-    cats.forEach(function(cat) {
-      var w = pop.total > 0 ? (cat.n / maxTotal * 100) : 0;
-      if (w > 0) h += '<div style="width:'+w.toFixed(1)+'%;background:'+cat.c+';display:flex;align-items:center;justify-content:center" title="'+cat.l+': '+cat.n+'">';
-      if (w > 5) h += '<span style="font-size:.65rem;font-weight:700;color:#fff">'+cat.n+'</span>';
-      if (w > 0) h += '</div>';
-    });
-    h += '</div>';
-    h += '<div style="min-width:50px;font-family:\'IBM Plex Mono\',monospace;font-size:.85rem;font-weight:800;color:var(--navy)">'+pop.total+'</div>';
-    h += '</div>';
-  });
-  // Legend
-  h += '<div style="display:flex;gap:14px;margin-top:8px;justify-content:center">';
-  [{ l:'PIs', c:'var(--navy)' },{ l:'Postdocs', c:'var(--teal)' },{ l:'PhD / Grads', c:'var(--peri)' },{ l:'Staff', c:'var(--coral)' }].forEach(function(leg){
-    h += '<span style="font-size:.75rem;color:var(--mut)"><span style="display:inline-block;width:10px;height:10px;border-radius:3px;background:'+leg.c+';margin-right:4px;vertical-align:middle"></span>'+leg.l+'</span>';
-  });
-  h += '</div>';
-  h += '</div></div>';
+  h += '</div>'; // close left table card
+  var _popItems = pops.map(function(p,i){ return { label:S.scenarios[i].name, value:p.total }; });
+  h += _vBarCard('Population by Scenario', _popItems, F);
+  h += '</div>'; // close grid
 
   // ── OCCUPANCY SENSITIVITY: OFFICES vs DESKS ──
   h += renderOccupancySensitivity(pops);
@@ -4889,7 +4887,8 @@ function renderPopulationTable() {
 // group size and at floor of PI+4 / ceiling of PI+2 above baseline.
 function renderOccupancySensitivity(pops) {
   if (S.scenarios.length === 0) return '';
-  var h = '<div class="card"><div class="card-title">Occupancy Sensitivity — Offices vs. Desks</div>';
+  var h = '<div style="display:grid;grid-template-columns:2fr 1fr;gap:14px;align-items:start">';
+  h += '<div class="card" style="min-width:0"><div class="card-title">Occupancy Sensitivity — Offices vs. Desks</div>';
   h += '<div class="card-sub">Faculty offices are fixed per PI count; desks scale with group size. Low band assumes PI+4 minimum; high band adds +2 FTE above baseline.</div>';
 
   var rows = S.scenarios.map(function(sc, si) {
@@ -4952,57 +4951,15 @@ function renderOccupancySensitivity(pops) {
   addRow('Population \u0394', function(r){ var d = r.totalSeatsHi - r.totalSeatsLo; return '\u00b1 '+F(Math.round(d/2))+' people ('+Math.round(d/r.totalSeats*100)+'%)'; }, true, 'var(--coral)');
 
   h += '</table></div>';
-
-  // Visual: offices vs desks stacked bar per scenario
-  h += '<div style="margin-top:20px">';
-  var maxSeats = Math.max.apply(null, rows.map(function(r){ return r.totalSeatsHi; }));
-
-  rows.forEach(function(r, i) {
-    var isActive = i === S.activeScenario;
-    var offPct = maxSeats > 0 ? (r.offices / maxSeats * 100) : 0;
-    var deskPct = maxSeats > 0 ? (r.desks / maxSeats * 100) : 0;
-    var loPct = maxSeats > 0 ? (r.desksLo / maxSeats * 100) : 0;
-    var hiPct = maxSeats > 0 ? (r.desksHi / maxSeats * 100) : 0;
-
-    h += '<div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">';
-    h += '<div style="min-width:180px;font-size:.8rem;font-weight:'+(isActive?'800':'600')+';color:var(--navy);text-align:right">'+r.name.replace(/^\d+ \u2014 /,'')+'</div>';
-    h += '<div style="flex:1;position:relative;height:36px">';
-
-    // Sensitivity range band (dashed) — spans from lo-desk to hi-desk, offset by offices
-    var bandLeft = offPct + loPct;
-    var bandWidth = hiPct - loPct;
-    h += '<div style="position:absolute;left:'+bandLeft.toFixed(1)+'%;width:'+bandWidth.toFixed(1)+'%;top:0;bottom:0;background:rgba(122,130,217,0.12);border:1px dashed var(--peri);border-radius:4px" title="Desk sensitivity range: '+r.desksLo+' \u2013 '+r.desksHi+'"></div>';
-
-    // Solid bar: offices + baseline desks
-    var barWidth = offPct + deskPct;
-    h += '<div style="position:absolute;left:0;top:4px;bottom:4px;width:'+barWidth.toFixed(1)+'%;display:flex;border-radius:5px;overflow:hidden">';
-    // Offices segment (proportional within the bar)
-    var offShare = r.offices / (r.offices + r.desks) * 100;
-    var deskShare = 100 - offShare;
-    h += '<div style="width:'+offShare.toFixed(1)+'%;background:var(--navy);display:flex;align-items:center;justify-content:center">';
-    if (offShare > 8) h += '<span style="font-size:.65rem;font-weight:700;color:#fff">'+r.offices+' offices</span>';
-    h += '</div>';
-    // Desks segment
-    h += '<div style="width:'+deskShare.toFixed(1)+'%;background:var(--peri);display:flex;align-items:center;justify-content:center">';
-    if (deskShare > 8) h += '<span style="font-size:.65rem;font-weight:700;color:#fff">'+r.desks+' desks</span>';
-    h += '</div>';
-    h += '</div>'; // end solid bar
-
-    h += '</div>'; // end bar container
-    h += '<div style="min-width:80px;font-family:\'IBM Plex Mono\',monospace;font-size:.82rem;font-weight:800;color:var(--navy)">'+r.totalSeats+' seats</div>';
-    h += '</div>';
-  });
-
-  // Legend
-  h += '<div style="display:flex;gap:16px;margin-top:10px;justify-content:center;flex-wrap:wrap">';
-  h += '<span style="font-size:.75rem;color:var(--mut)"><span style="display:inline-block;width:12px;height:12px;border-radius:3px;background:var(--navy);margin-right:4px;vertical-align:middle"></span>Faculty Offices</span>';
-  h += '<span style="font-size:.75rem;color:var(--mut)"><span style="display:inline-block;width:12px;height:12px;border-radius:3px;background:var(--peri);margin-right:4px;vertical-align:middle"></span>Write-up Desks (baseline)</span>';
-  h += '<span style="font-size:.75rem;color:var(--mut)"><span style="display:inline-block;width:12px;height:12px;border-radius:3px;background:rgba(122,130,217,0.2);border:1px dashed var(--peri);margin-right:4px;vertical-align:middle"></span>±2 FTE Sensitivity</span>';
-  h += '</div>';
-  h += '</div></div>';
+  h += '</div>'; // close left table card
+  var _seatItems = rows.map(function(r,i){ return { label:r.name, value:r.totalSeats }; });
+  h += _vBarCard('Seats by Scenario', _seatItems, F);
+  h += '</div>'; // close grid
 
   return h;
 }
+
+
 
 // ============================================================
 // PROGRAM-VS-CAPACITY UTILIZATION BAR
@@ -5121,10 +5078,11 @@ function renderBarChart(data, valKey, labelKey, colorKey) {
 
 function renderComparisonChart() {
   if (S.scenarios.length === 0) return '';
-  var w = 720, h = 320;
+  // v0.8.21: shared baseline geometry with renderLabMixChart (baseline y=306,
+  // viewBox 720x360) so the two charts' x-axes align side by side.
+  var w = 720, h = 360, baseY = 306, scaleH = 250;
   var barW = Math.min(90, (w - 100) / S.scenarios.length - 20);
   var maxVal = Math.max.apply(null, S.scenarios.map(function(sc){return sc.data.totalNASF}));
-  var chartH = 240;
   var svg = '<svg viewBox="0 0 '+w+' '+h+'" style="width:100%;max-width:'+w+'px;font-family:Sora,sans-serif">';
 
   S.scenarios.forEach(function(sc, i) {
@@ -5137,24 +5095,23 @@ function renderComparisonChart() {
       { v:sc.data.communityNASF, c:FICM.commA, l:'Community' },
       { v:sc.data.eventNASF, c:FICM.learnA, l:'Event' },
     ];
-    var y = chartH;
+    var y = baseY;
     vals.forEach(function(seg) {
-      var segH = maxVal > 0 ? (seg.v / maxVal * chartH) : 0;
+      var segH = maxVal > 0 ? (seg.v / maxVal * scaleH) : 0;
       y -= segH;
       svg += '<rect x="'+x+'" y="'+y+'" width="'+barW+'" height="'+Math.max(0,segH)+'" fill="'+seg.c+'" opacity="'+opacity+'" rx="2" style="cursor:pointer" onclick="selectScenario('+i+');render()"><title>'+seg.l+': '+F(seg.v)+'</title></rect>';
     });
+    var totVal = sc.data.piNASF+sc.data.coreNASF+sc.data.communityNASF+sc.data.eventNASF;
     if (isActive) {
-      var totalH = maxVal>0?((sc.data.piNASF+sc.data.coreNASF+sc.data.communityNASF+sc.data.eventNASF)/maxVal*chartH):0;
-      svg += '<rect x="'+(x-1)+'" y="'+(chartH-totalH-1)+'" width="'+(barW+2)+'" height="'+(totalH+2)+'" fill="none" stroke="#1B3A5C" stroke-width="2.5" rx="3"/>';
+      var totalH = maxVal>0?(totVal/maxVal*scaleH):0;
+      svg += '<rect x="'+(x-1)+'" y="'+(baseY-totalH-1)+'" width="'+(barW+2)+'" height="'+(totalH+2)+'" fill="none" stroke="#1B3A5C" stroke-width="2.5" rx="3"/>';
     }
-    svg += '<text x="'+(x+barW/2)+'" y="'+(chartH+20)+'" text-anchor="middle" font-size="12" font-weight="'+(isActive?'900':'600')+'" fill="#1B3A5C">'+sc.name.substring(0,14)+'</text>';
-    var totalY = chartH - (maxVal>0?(sc.data.piNASF+sc.data.coreNASF+sc.data.communityNASF+sc.data.eventNASF)/maxVal*chartH:0) - 8;
-    svg += '<text x="'+(x+barW/2)+'" y="'+totalY+'" text-anchor="middle" font-size="12" font-weight="700" fill="#1B3A5C" font-family="IBM Plex Mono">'+F(sc.data.piNASF+sc.data.coreNASF+sc.data.communityNASF+sc.data.eventNASF)+'</text>';
+    svg += '<text x="'+(x+barW/2)+'" y="'+(baseY+22)+'" text-anchor="middle" font-size="15" font-weight="'+(isActive?'900':'700')+'" fill="#1B3A5C">'+sc.name.substring(0,3)+'</text>';
+    var totalY = baseY - (maxVal>0?(totVal/maxVal*scaleH):0) - 8;
+    svg += '<text x="'+(x+barW/2)+'" y="'+totalY+'" text-anchor="middle" font-size="17" font-weight="900" fill="#1B3A5C">'+FMM(totVal)+'</text>';
   });
-
-  var targetY = maxVal > 0 ? chartH - (S.scenarios[0].data.totalNASF / maxVal * chartH) : 0;
-  svg += '<line x1="70" y1="'+targetY+'" x2="'+(w-10)+'" y2="'+targetY+'" stroke="#1B3A5C" stroke-width="1.5" stroke-dasharray="6,4"/>';
-  svg += '<text x="65" y="'+(targetY+4)+'" text-anchor="end" font-size="10" fill="#1B3A5C" font-weight="600">Budget</text>';
+  // v0.8.21: x-axis baseline line.
+  svg += '<line x1="74" y1="'+baseY+'" x2="'+(w-14)+'" y2="'+baseY+'" stroke="#1B3A5C" stroke-width="1.5"/>';
   svg += '</svg>';
   svg += masterLegend();
   return svg;
@@ -5165,25 +5122,28 @@ function renderLabMixChart() {
   // v0.5.57: per user — widen bars, enlarge data labels, show totals
   // at the top of each bar, and let multi-word scenario names wrap.
   var n = S.scenarios.length;
-  var w = 720, h = 420;
-  var barW = Math.min(150, Math.max(80, (w - 120) / n - 30));
+  // v0.8.21: shared baseline geometry with renderComparisonChart so the two
+  // charts' x-axes line up when shown side by side.
+  var w = 720, h = 360;
+  var _lpad = 50, _rpad = 20;
+  var _slot = (w - _lpad - _rpad) / n;
+  var barW = Math.min(130, _slot * 0.62);
   var maxVal = Math.max.apply(null, S.scenarios.map(function(sc){return sc.data.piNASF||1}));
-  var chartTop = 70;        // leaves room for the totals stack above each bar
-  var chartH = 260;
-  var chartBottom = chartTop + chartH;
+  var chartTop = 56;        // leaves room for the totals stack above each bar
+  var chartH = 250;
+  var chartBottom = chartTop + chartH;  // = 306 (shared baseline)
   var rnd50 = (typeof _skillRound50 === 'function') ? _skillRound50 : function(n){ return Math.round((+n||0)/50)*50; };
   var svg = '<svg viewBox="0 0 '+w+' '+h+'" style="width:100%;max-width:'+w+'px;font-family:Sora,sans-serif">';
 
   S.scenarios.forEach(function(sc, si) {
-    var x = 80 + si * (barW + 40);
+    var x = _lpad + si * _slot + (_slot - barW) / 2;
     var cx = x + barW / 2;
     var isActive = si === S.activeScenario;
     var opacity = isActive ? '1' : '0.55';
     // Totals (drawn ABOVE the bar)
     var totalPIs = (sc.data.typeBreakdown || []).reduce(function(a,t){ return a + (+t.pis || 0); }, 0);
     var totalNSF = rnd50(sc.data.piNASF || 0);
-    svg += '<text x="'+cx+'" y="'+(chartTop-32)+'" text-anchor="middle" font-size="18" font-weight="700" fill="#1B3A5C">'+totalPIs+' PIs</text>';
-    svg += '<text x="'+cx+'" y="'+(chartTop-12)+'" text-anchor="middle" font-size="14" font-weight="500" fill="#5A5F66" font-family="IBM Plex Mono, monospace">'+F(totalNSF)+' NSF</text>';
+    svg += '<text x="'+cx+'" y="'+(chartTop-14)+'" text-anchor="middle" font-size="24" font-weight="900" fill="#1B3A5C">'+totalPIs+' PIs</text>';
     // Stacked bar
     var y = chartBottom;
     sc.data.typeBreakdown.forEach(function(t) {
@@ -5192,7 +5152,7 @@ function renderLabMixChart() {
         y -= segH;
         svg += '<rect x="'+x+'" y="'+y+'" width="'+barW+'" height="'+Math.max(0,segH)+'" fill="'+t.color+'" opacity="'+opacity+'" rx="2" style="cursor:pointer" onclick="selectScenario('+si+');render()"><title>'+t.label+': '+F(t.totalNASF)+' ('+t.pis+' PIs)</title></rect>';
         if (segH > 18 && t.pis > 0) {
-          svg += '<text x="'+cx+'" y="'+(y+segH/2)+'" text-anchor="middle" dominant-baseline="central" font-size="15" font-weight="700" fill="#fff" style="pointer-events:none">'+t.pis+'</text>';
+          svg += '<text x="'+cx+'" y="'+(y+segH/2)+'" text-anchor="middle" dominant-baseline="central" font-size="18" font-weight="900" fill="#fff" style="pointer-events:none">'+t.pis+'</text>';
         }
       }
     });
@@ -5200,21 +5160,11 @@ function renderLabMixChart() {
       var totalH = maxVal>0?(sc.data.piNASF/maxVal*chartH):0;
       svg += '<rect x="'+(x-2)+'" y="'+(chartBottom-totalH-2)+'" width="'+(barW+4)+'" height="'+(totalH+4)+'" fill="none" stroke="#1B3A5C" stroke-width="2.5" rx="3"/>';
     }
-    // Scenario name — wrap to two lines on the first space if longer than ~10 chars
-    var parts = String(sc.name || '').split(' ');
-    var fontSize = isActive ? 15 : 14;
-    var fontWeight = isActive ? '700' : '500';
-    if (parts.length > 1 && sc.name.length > 10) {
-      // Split roughly in half by words
-      var midIdx = Math.ceil(parts.length / 2);
-      var l1 = parts.slice(0, midIdx).join(' ');
-      var l2 = parts.slice(midIdx).join(' ');
-      svg += '<text x="'+cx+'" y="'+(chartBottom+24)+'" text-anchor="middle" font-size="'+fontSize+'" font-weight="'+fontWeight+'" fill="#1B3A5C">'+l1+'</text>';
-      svg += '<text x="'+cx+'" y="'+(chartBottom+44)+'" text-anchor="middle" font-size="'+fontSize+'" font-weight="'+fontWeight+'" fill="#1B3A5C">'+l2+'</text>';
-    } else {
-      svg += '<text x="'+cx+'" y="'+(chartBottom+28)+'" text-anchor="middle" font-size="'+fontSize+'" font-weight="'+fontWeight+'" fill="#1B3A5C">'+sc.name+'</text>';
-    }
+    // v0.8.21: x-axis label = first 3 chars of the scenario name.
+    svg += '<text x="'+cx+'" y="'+(chartBottom+22)+'" text-anchor="middle" font-size="15" font-weight="'+(isActive?'900':'700')+'" fill="#1B3A5C">'+String(sc.name).substring(0,3)+'</text>';
   });
+  // v0.8.21: x-axis baseline line.
+  svg += '<line x1="'+(_lpad-6)+'" y1="'+chartBottom+'" x2="'+(w-_rpad+6)+'" y2="'+chartBottom+'" stroke="#1B3A5C" stroke-width="1.5"/>';
   svg += '</svg>';
   svg += '<div class="legend" style="justify-content:center;margin-top:8px;font-size:.85rem">';
   S.types.forEach(function(t){ svg += '<div class="legend-item"><div class="legend-dot" style="background:'+t.color+'"></div>'+t.label+'</div>'; });
@@ -5256,8 +5206,8 @@ function renderLabMixSFTable() {
   // Scenario names are also wrapped onto two lines via white-space:normal
   // so long names like "Baseline Scenario" don't truncate.
   var ACTIVE_BG = 'background:#FFF4C7;color:var(--navy);';
-  var html = '<div style="overflow-x:auto"><table class="comp" style="font-size:.82rem;width:100%">';
-  html += '<thead><tr><th style="text-align:left;min-width:130px;vertical-align:bottom">Typology</th>';
+  var html = '<div style="overflow-x:auto"><table class="comp" style="font-size:.72rem;width:100%">';
+  html += '<thead><tr><th style="text-align:left;min-width:100px;vertical-align:bottom">Typology</th>';
   S.scenarios.forEach(function(sc, si){
     // Active column header: pale yellow band with navy text (overrides the
     // default navy-on-white thead styling for THIS cell only). Inactive
@@ -5265,13 +5215,13 @@ function renderLabMixSFTable() {
     var activeHead = si === S.activeScenario
       ? 'background:#FFF4C7;color:var(--navy);'
       : '';
-    html += '<th style="text-align:right;font-size:.78rem;font-weight:700;white-space:normal;line-height:1.15;min-width:90px;padding:6px 8px;vertical-align:bottom;'+activeHead+'">'+sc.name+'</th>';
+    html += '<th style="text-align:right;font-size:.7rem;font-weight:700;white-space:nowrap;line-height:1.15;min-width:38px;padding:5px 6px;vertical-align:bottom;'+activeHead+'" title="'+sc.name+'">'+sc.name.substring(0,3)+'</th>';
   });
   html += '</tr></thead><tbody>';
   rowIds.forEach(function(tid){
     var t = typeMap[tid] || { label: tid, color: '#888' };
     html += '<tr>';
-    html += '<td style="padding:4px 6px"><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:'+t.color+';margin-right:6px;vertical-align:middle"></span>'+t.label+'</td>';
+    html += '<td style="padding:4px 6px">'+t.label+'</td>';
     S.scenarios.forEach(function(sc, si){
       var val = data[si][tid] || 0;
       var activeBg = si === S.activeScenario ? ACTIVE_BG : '';
