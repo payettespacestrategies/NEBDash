@@ -3401,10 +3401,21 @@ function renderCost(d) {
   var totalNewFitout = 0;
   cs.progLines.forEach(function(p){ p._calc = _enrichRow(p); totalNewFitout += p._calc.fitoutCost; });
 
-  // v0.7: Cost Detail is full-width; the cost composition renders as a
-  // horizontal bar below it (single-column grid stacks them).
+  // v0.8.25: Cost-column heatmap matching the Project Breakdown card
+  // (#F5F9FD → #A9CDF1), scaled to the largest single cost line.
+  var _costMax = Math.max(cs.totalCoreShell||0, cs.totalSite||0, 1);
+  cs.progLines.forEach(function(p){ if (p._calc) _costMax = Math.max(_costMax, p._calc.fitoutCost||0); });
+  function heatCost(v){
+    var t = Math.max(0, Math.min(1, (v||0)/_costMax));
+    var a=[245,249,253], b=[169,205,241];
+    return 'rgb('+Math.round(a[0]+(b[0]-a[0])*t)+','+Math.round(a[1]+(b[1]-a[1])*t)+','+Math.round(a[2]+(b[2]-a[2])*t)+')';
+  }
+
+  // v0.8.25: Cost Composition bar first; Cost Detail + Fitout Rate Menu below it.
+  h += _skillBuildCostCompositionBar(d, cs);
+
   h += '<div class="cost-top-grid" style="display:grid;grid-template-columns:2fr 1fr;gap:12px;align-items:start;margin-bottom:12px">';
-  h += '<div class="card" style="min-width:0"><div class="card-title">Cost Detail</div>';
+  h += '<div class="card" style="min-width:0"><div class="card-title">Construction Cost Detail</div>';
   h += '<div class="card-sub">DGSF = NASF + pro-rata circulation. GSF = DGSF + pro-rata building support. Circulation '+(circPct*100).toFixed(0)+'% and Building Support '+(bsPct*100).toFixed(0)+'% (of GSF) come from the Floor Stacking sliders. Core &amp; Shell + Site &amp; Demo are applied to total GSF; Fitout Cost = DGSF × $/DGSF rate.</div>';
   h += '<div class="cost-detail-compact" style="overflow-x:auto">';
   h += '<table class="comp" style="background:transparent;font-family:\'Roboto\',sans-serif">';
@@ -3440,7 +3451,7 @@ function renderCost(d) {
     // v0.7: $/DGSF cell — value above the (hidden) benchmark dropdown; click to reveal.
     row += '<td style="text-align:center"><div onclick="_toggleBench(this)" title="Click to map a benchmark rate" style="'+numStyle+';color:'+clrNASF+';cursor:pointer">$'+F(e.rateDGSF)+'</div>'
          + (p.mapType ? _benchSelect(p.mapType, p.mapKey, p.rate) : '') + '</td>';
-    row += '<td style="'+numStyle+';color:'+clrNASF+'">'+FMM(e.fitoutCost)+'</td>';
+    row += '<td style="'+numStyle+';color:#0C447C;background:'+heatCost(e.fitoutCost)+'">'+FMM(e.fitoutCost)+'</td>';
     row += '<td style="'+numStyle+';color:'+clrBS+'">'+F(e.gfaNew)+'</td>';
     row += '</tr>';
     return row;
@@ -3457,7 +3468,7 @@ function renderCost(d) {
       + '<td style="'+numStyle+';color:'+clrCirc+';font-weight:700">'+F(sCirc)+'</td>'
       + '<td style="'+numStyle+';color:'+clrNASF+';font-weight:700">'+F(sDGSF)+'</td>'
       + '<td></td>'
-      + '<td style="'+numStyle+';color:'+clrNASF+';font-weight:700">'+FMM(sCost)+'</td>'
+      + '<td style="'+numStyle+';color:#0C447C;font-weight:700;background:'+heatCost(sCost)+'">'+FMM(sCost)+'</td>'
       + '<td style="'+numStyle+';color:'+clrBS+';font-weight:700">'+F(sGFA)+'</td>'
       + '</tr>';
   }
@@ -3468,7 +3479,7 @@ function renderCost(d) {
       + '<td colspan="4" style="'+numStyle+';color:#5A5F66;font-weight:500">'+F(d.totalGSF)+' GSF</td>'
       + '<td style="text-align:center"><div onclick="_toggleBench(this)" title="Click to map a benchmark rate" style="'+numStyle+';color:'+clrNASF+';cursor:pointer">$'+F(rate)+'/GSF</div>'
         + (mapKey ? _benchSelect('direct', mapKey, rate) : '') + '</td>'
-      + '<td style="'+numStyle+';color:'+clrNASF+'">'+FMM(total)+'</td>'
+      + '<td style="'+numStyle+';color:#0C447C;background:'+heatCost(total)+'">'+FMM(total)+'</td>'
       + '<td style="'+numStyle+';color:#5A5F66;font-weight:500">'+F(d.totalGSF)+'</td>'
       + '</tr>';
   }
@@ -3484,7 +3495,7 @@ function renderCost(d) {
   h += '<tr style="border-top:1px solid '+clrRule+'">'
     + '<td style="padding-left:18px;'+labelStyle+';font-weight:700">Subtotal: Core &amp; Shell + Site</td>'
     + '<td colspan="6"></td>'
-    + '<td style="'+numStyle+';color:'+clrNASF+';font-weight:700">'+FMM(shellSiteTotal)+'</td>'
+    + '<td style="'+numStyle+';color:#0C447C;font-weight:700;background:'+heatCost(shellSiteTotal)+'">'+FMM(shellSiteTotal)+'</td>'
     + '<td></td>'
     + '</tr>';
 
@@ -3526,7 +3537,7 @@ function renderCost(d) {
     + '<td style="'+numStyle+';font-weight:800;color:'+clrCirc+'">'+F(sumCircAll)+'</td>'
     + '<td style="'+numStyle+';font-weight:800;color:'+clrNASF+'">'+F(sumDGSFAll)+'</td>'
     + '<td></td>'
-    + '<td style="'+numStyle+';font-weight:800;color:'+clrNASF+'">'+FMM(totalNewFitout)+'</td>'
+    + '<td style="'+numStyle+';font-weight:800;color:#0C447C;background:'+heatCost(totalNewFitout)+'">'+FMM(totalNewFitout)+'</td>'
     + '<td style="'+numStyle+';font-weight:800;color:'+clrBS+'">'+F(sumGFAAll)+'</td>'
     + '</tr>';
 
@@ -3536,7 +3547,7 @@ function renderCost(d) {
     + '<td style="'+labelStyle+';font-weight:900;font-size:1.02rem">Base Construction (Q'+S.cost.baseQuarter+' '+S.cost.baseYear+')</td>'
     + '<td colspan="3" style="'+numStyle+';color:#5A5F66;font-weight:600">'+F(d.totalGSF)+' GSF</td>'
     + '<td colspan="3" style="'+numStyle+';color:'+clrNASF+';font-weight:800">$'+F(Math.round(newConstructionCost/d.totalGSF))+'/GSF</td>'
-    + '<td style="'+numStyle+';font-weight:900;font-size:1.02rem;color:'+clrNASF+'">'+FMM(newConstructionCost)+'</td>'
+    + '<td style="'+numStyle+';font-weight:900;font-size:1.02rem;color:#0C447C;background:'+heatCost(newConstructionCost)+'">'+FMM(newConstructionCost)+'</td>'
     + '<td></td>'
     + '</tr>';
   h += '</tbody></table></div></div>';
@@ -3575,8 +3586,6 @@ function renderCost(d) {
   h += '<div style="font-family:\'Roboto\',sans-serif;font-weight:900;font-size:.92rem;padding:8px 6px;margin-top:8px;border-top:2px solid #1B3A5C;text-align:right;color:var(--navy)">Fitout Total: '+FMM(cs.totalFitout)+'</div>';
   h += '</div>'; // close Fitout Rate Menu card
   h += '</div>'; // close .cost-top-grid (Cost Detail 2/3 | Fitout Rate Menu 1/3)
-  // Cost Composition — horizontal stacked bar, full width below the row.
-  h += _skillBuildCostCompositionBar(d, cs);
 
   // v0.8.20: Project Cost Buildup sits on the RIGHT; Core & Shell + Site and
   // Escalation & Tariff are stacked in the LEFT column beside it.
