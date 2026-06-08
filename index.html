@@ -3168,16 +3168,43 @@ function renderEnergy(d) {
 // ============================================================
 // TAB 9: COST
 // ============================================================
-function setCost(key, val) { S.cost[key] = parseFloat(val); render(); }
+// v0.8.16: certain cost parameters are GLOBAL — editing their slider applies the
+// value to every saved scenario (not just the loaded/working one). Used for the
+// Design/Construction Contingency and Escalation (rate + base/target period)
+// controls so a single change re-prices all scenarios consistently.
+var _GLOBAL_COST_KEYS = { designContingencyPct:1, constructionContingencyPct:1,
+  escalationRate:1, escalationYear:1, escalationQuarter:1, baseYear:1, baseQuarter:1 };
+function _propagateGlobalCost(key) {
+  var v = S.cost[key];
+  (S.scenarios || []).forEach(function(sc) {
+    if (sc && sc.state) { sc.state.cost = sc.state.cost || {}; sc.state.cost[key] = v; }
+  });
+}
+function setCost(key, val) { S.cost[key] = parseFloat(val); if (_GLOBAL_COST_KEYS[key]) _propagateGlobalCost(key); render(); }
 // v0.8.6: one slider per period — value is a quarter index (year*4 + quarter-1)
 // that decodes into the year + quarter fields.
 function setCostQuarter(yearKey, quarterKey, qIndex) {
   qIndex = parseInt(qIndex, 10);
   S.cost[yearKey] = Math.floor(qIndex / 4);
   S.cost[quarterKey] = (qIndex % 4) + 1;
+  if (_GLOBAL_COST_KEYS[yearKey]) _propagateGlobalCost(yearKey);
+  if (_GLOBAL_COST_KEYS[quarterKey]) _propagateGlobalCost(quarterKey);
   render();
 }
-function setCostInt(key, val) { S.cost[key] = parseInt(val); render(); }
+function setCostInt(key, val) { S.cost[key] = parseInt(val); if (_GLOBAL_COST_KEYS[key]) _propagateGlobalCost(key); render(); }
+// v0.8.16: enforce the requested baseline across S.cost + every scenario —
+// Design & Construction Contingency = 0%, Escalation = 12.5% at Q4 2028
+// (compounded from a Q4 2025 base over 3 years).
+function _enforceGlobalCostDefaults() {
+  if (!S.cost) S.cost = {};
+  var escRate = Math.pow(1.125, 1/3) - 1; // exact 12.5% over 3 years
+  var defs = { designContingencyPct:0, constructionContingencyPct:0,
+    escalationRate:escRate, escalationYear:2028, escalationQuarter:4, baseYear:2025, baseQuarter:4 };
+  Object.keys(defs).forEach(function(k){ S.cost[k] = defs[k]; });
+  (S.scenarios || []).forEach(function(sc) {
+    if (sc && sc.state) { sc.state.cost = sc.state.cost || {}; Object.keys(defs).forEach(function(k){ sc.state.cost[k] = defs[k]; }); }
+  });
+}
 function setTypeRate(id, val) { S.cost.typeRates[id] = parseInt(val); render(); }
 function setCoreRate(name, val) { S.cost.coreRates[name] = parseInt(val); render(); }
 
@@ -3614,6 +3641,13 @@ function renderCost(d) {
   // Scenario comparison now lives at the top of the tab (two half-width cards
   // under the Cost Summary) — see _buildScenarioTopCharts().
 
+  // v0.8.14: detailed Project Breakdown (space-type fit-out nested under
+  // Construction + Gen. Cond.) sits at the bottom of the tab. The simple
+  // version stays beside the Total Project Cost chart up top.
+  if (S.scenarios && S.scenarios.length) {
+    h += '<div style="max-width:620px;margin-top:6px">' + _buildSelectedScenarioBreakdownTable(true) + '</div>';
+  }
+
   h += '</div>'; // close .cost-roboto
   return h;
 }
@@ -3745,6 +3779,62 @@ function _fitoutCats() {
   cats.sort(function(a,b){ return ord(a.id) - ord(b.id); });
   return cats.map(function(c){ return { id:c.id, color:c.color, label:(c.id === 'core' ? 'Shared' : c.label) }; });
 }
+// v0.8.13: classify every program fit-out line into the 12 NEB cost categories
+// used by the Project Breakdown table + Excel export. Returns an ORDERED list of
+// buckets (always present, $0 if empty); 'research' subtotal = the 5 indented
+// children. Each bucket carries {key,label,level,cost,dgsf,nasf}.
+//   level 1 = top category / Research group header
+//   level 2 = child under Research
+function _fitoutUserCategories(cc, benchMap) {
+  benchMap = benchMap || (cc && cc.benchMap) || (S.cost && S.cost.benchMap) || {};
+  function bcat(p){ var bk=benchMap[p.mapType+':'+p.mapKey]; var e=(window.BENCH_RATES||[]).filter(function(x){return x.key===bk})[0]; return (e&&e.cat)||''; }
+  var B = {
+    labs:0, pioffice:0, sharedlabs:0, collab:0, contingency:0,
+    community:0, event:0, clubs:0, adminoffice:0, progsupport:0, shell:0
+  };
+  var DG = {}, NA = {}; Object.keys(B).forEach(function(k){ DG[k]=0; NA[k]=0; });
+  (cc.progLines || []).forEach(function(p){
+    var key;
+    var c = p.cat || '';
+    // Order matters: PI office/desks and the Unallocated capacity line are
+    // identified first; then ANY line priced as warm shell → Shell (regardless
+    // of its program group, matching the Fit-Out-by-Category chart); then the
+    // remaining group/category rules.
+    if (p.mapKey === 'piOfficeRate' || p.mapKey === 'piWriteupRate') key = 'pioffice';
+    else if (p.group === 'unalloc')  key = 'contingency';
+    else if (bcat(p) === 'shell' || /shell/i.test(c)) key = 'shell';
+    else if (p.group === 'research') key = 'labs';
+    else if (p.group === 'core')     key = 'sharedlabs';
+    else { // group === 'other'
+      if (c === 'Collaboration') key = 'collab';
+      else if (c === 'Community') key = 'community';
+      else if (c === 'Event') key = 'event';
+      else if (c === 'Classroom' || c === 'Teaching Lab' || c === 'Learning Support') key = 'clubs';
+      else if (c === 'Office (Enclosed)' || c === 'Office (Open)' || c === 'Office Support') key = 'adminoffice';
+      else if (c === 'Program Support') key = 'progsupport';
+      else key = 'progsupport';
+    }
+    B[key] += p.cost || 0; DG[key] += p.dgsf || 0; NA[key] += p.nasf || 0;
+  });
+  function mk(key, label, level){ return { key:key, label:label, level:level, cost:B[key], dgsf:DG[key], nasf:NA[key] }; }
+  var researchCost = B.labs + B.pioffice + B.sharedlabs + B.collab + B.contingency;
+  var researchDG   = DG.labs + DG.pioffice + DG.sharedlabs + DG.collab + DG.contingency;
+  var researchNA   = NA.labs + NA.pioffice + NA.sharedlabs + NA.collab + NA.contingency;
+  return [
+    { key:'research', label:'Research', level:1, cost:researchCost, dgsf:researchDG, nasf:researchNA, isGroup:true },
+    mk('labs',        'Labs',             2),
+    mk('pioffice',    'PI Office & Desks',2),
+    mk('sharedlabs',  'Shared Labs',      2),
+    mk('collab',      'Collaboration',    2),
+    mk('contingency', 'Unallocated',      2),
+    mk('community',   'Community',         1),
+    mk('event',       'Event',            1),
+    mk('clubs',       'Clubs',            1),
+    mk('adminoffice', 'Admin Office',     1),
+    mk('progsupport', 'Program Support',  1),
+    mk('shell',       'Shell',            1)
+  ];
+}
 // Construction (fit-out + core & shell + site) for the SELECTED scenario, grouped
 // by FICM category — driven by clicks in the two charts above.
 function _buildSelectedScenarioConstructionBar() {
@@ -3774,7 +3864,7 @@ function _buildSelectedScenarioConstructionBar() {
 }
 // v0.8.8: Hard/Soft project breakdown table for the SELECTED scenario (updates
 // when a bar/row is clicked in the charts above), styled like the budget table.
-function _buildSelectedScenarioBreakdownTable() {
+function _buildSelectedScenarioBreakdownTable(detailed) {
   var scs = S.scenarios || []; if (!scs.length) return '';
   var sel = _selScen(), sc = scs[sel]; if (!sc || !sc.data) return '';
   var cc = sc.data.cost || {}; var proj = cc.projectCost || 1;
@@ -3795,15 +3885,44 @@ function _buildSelectedScenarioBreakdownTable() {
   }
   var th = 'padding:8px 12px;font-family:\'Roboto\',sans-serif;font-weight:700;font-size:.68rem;text-transform:uppercase;letter-spacing:.05em;color:var(--mut);background:transparent;border-bottom:2px solid #1B3A5C';
   var num = 'font-family:\'Roboto\',sans-serif;text-align:right;font-variant-numeric:tabular-nums';
-  var h = '<div class="card" style="margin:0"><div class="card-title"><span style="font-weight:900">Project Breakdown</span>&ensp;&ensp;<span style="font-weight:300">'+nm+'</span></div>';
-  h += '<div class="card-sub">Hard + soft cost buildup as a share of total project cost for the selected scenario. Darker cost cells = bigger line items.</div>';
+  var _ttl = detailed ? 'Project Breakdown — Detail' : 'Project Breakdown';
+  var h = '<div class="card" style="margin:0"><div class="card-title"><span style="font-weight:900">'+_ttl+'</span>&ensp;&ensp;<span style="font-weight:300">'+nm+'</span></div>';
+  h += '<div class="card-sub">Hard + soft cost buildup as a share of total project cost for the selected scenario.'+(detailed?' Program fit-out broken out by category under Construction + Gen. Cond.':'')+' Darker cost cells = bigger line items.</div>';
   h += '<table class="comp" style="width:100%;border-collapse:collapse;table-layout:fixed;font-family:\'Roboto\',sans-serif">';
   h += '<colgroup><col style="width:46%"><col style="width:21%"><col style="width:33%"></colgroup>';
   h += '<thead><tr><th style="'+th+';text-align:left">Project breakdown</th><th style="'+th+';text-align:right">% of Project</th><th style="'+th+';text-align:right">Cost</th></tr></thead><tbody>';
   function section(label, pctv, amt, v){ return '<tr style="border-top:1.5px solid #1B3A5C"><td style="padding:8px 12px;font-weight:700;color:var(--navy);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+label+'</td><td style="'+num+';padding:8px 12px;font-weight:700;color:var(--navy)">'+pctv+'</td><td style="'+num+';padding:8px 12px;font-weight:700;color:#042C53;background:'+heat(v)+'">'+amt+'</td></tr>'; }
   function row(label, v){ return '<tr><td style="padding:6px 12px 6px 22px;color:#3A4046;border-bottom:1px solid var(--bdr);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+label+'">'+label+'</td><td style="'+num+';padding:6px 12px;color:#5A5F66;border-bottom:1px solid var(--bdr)">'+pc(v)+'</td><td style="'+num+';padding:6px 12px;color:#0C447C;border-bottom:1px solid var(--bdr);background:'+heat(v)+'">'+money(v)+'</td></tr>'; }
+  // v0.8.13: nested detail rows under Construction + Gen. Cond. — indent by level,
+  // optional band styling for the "Program fit-out" header + Research subtotal.
+  function drow(label, v, indent, opt){ opt = opt || {};
+    var lblStyle = 'padding:5px 12px 5px '+indent+'px;border-bottom:1px solid var(--bdr);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;'
+      + (opt.band ? 'font-weight:500;color:#13314D;background:#EEF3F8' : 'color:#5A5F66');
+    var valWeight = opt.band ? '500' : '400';
+    var bg = opt.band ? '#EEF3F8' : heat(v);
+    return '<tr><td style="'+lblStyle+'" title="'+label+'">'+label+'</td>'
+      + '<td style="'+num+';padding:5px 12px;color:#6A6F76;border-bottom:1px solid var(--bdr);font-weight:'+valWeight+';'+(opt.band?'background:#EEF3F8':'')+'">'+pc(v)+'</td>'
+      + '<td style="'+num+';padding:5px 12px;color:#0C447C;border-bottom:1px solid var(--bdr);font-weight:'+valWeight+';background:'+bg+'">'+money(v)+'</td></tr>';
+  }
   h += section('Hard Costs', pc(cc.hardCost), money(cc.hardCost), cc.hardCost);
-  hardRows.forEach(function(r){ h += row(r[0], r[1]); });
+  if (detailed) {
+    // Construction + Gen. Cond. with nested program fit-out + building-wide rows.
+    h += row('Construction + Gen. Cond.', cc.constructionCost);
+    var _fcats = _fitoutUserCategories(cc, (sc.state && sc.state.cost ? sc.state.cost.benchMap : null));
+    var _fitTotal = 0; (cc.progLines||[]).forEach(function(p){ _fitTotal += p.cost||0; });
+    h += drow('Program fit-out', _fitTotal, 34, { band:true });
+    _fcats.forEach(function(fc){
+      var indent = fc.level === 2 ? 60 : 46;
+      h += drow(fc.label, fc.cost, indent, { band: fc.isGroup });
+    });
+    h += drow('Core &amp; Shell', cc.totalCoreShell || 0, 34);
+    h += drow('Site', cc.totalSite || 0, 34);
+    // Remaining hard-cost rows (skip Construction + Gen. Cond., already shown).
+    hardRows.slice(1).forEach(function(r){ h += row(r[0], r[1]); });
+  } else {
+    // Simple version — flat hard-cost rows.
+    hardRows.forEach(function(r){ h += row(r[0], r[1]); });
+  }
   h += '<tr><td colspan="3" style="height:8px"></td></tr>';
   h += section('Soft Costs', pc(cc.softCostTotal), money(cc.softCostTotal), cc.softCostTotal);
   softRows.forEach(function(r){ h += row(r[0], r[1]); });
@@ -5910,12 +6029,250 @@ function _buildCostSheet(wb, ctx) {
 
   XLSX.utils.book_append_sheet(wb, ws, 'Cost Estimator Summary');
 }
+// v0.8.15: "Scenario Costs" sheet — matches the manual Scenario Costs Template.
+// One block per scenario (Cost/SF | Area (DGSF) | % | Cost) separated by a blank
+// column, a merged title block (name / image placeholder / description) in rows
+// 3-5, the finer program breakout (Community, Classroom, Event, Clubs, Dean's
+// Office, Farley Center, Program Support, Shell), full build-up to Total Project
+// Cost with every cost as a live formula, and a PI Typologies table.
+function _fitoutTemplateCats(cc, benchMap) {
+  benchMap = benchMap || (cc && cc.benchMap) || (S.cost && S.cost.benchMap) || {};
+  function bcat(p){ var bk=benchMap[p.mapType+':'+p.mapKey]; var e=(window.BENCH_RATES||[]).filter(function(x){return x.key===bk})[0]; return (e&&e.cat)||''; }
+  var keys=['labs','pioffice','sharedlabs','collab','contingency','community','classroom','event','clubs','deansoffice','farley','progsupport','shell'];
+  var B={}, D={}; keys.forEach(function(k){B[k]=0;D[k]=0;});
+  var byType={};
+  (cc.progLines||[]).forEach(function(p){
+    var c=p.cat||'', key;
+    if (p.mapType==='type'){ byType[p.mapKey]=byType[p.mapKey]||{cost:0,dgsf:0}; byType[p.mapKey].cost+=p.cost||0; byType[p.mapKey].dgsf+=p.dgsf||0; }
+    if (p.mapKey==='piOfficeRate'||p.mapKey==='piWriteupRate') key='pioffice';
+    else if (p.group==='unalloc') key='contingency';
+    else if (/dean/i.test(c)) key='deansoffice';
+    else if (/farley/i.test(c)) key='farley';
+    else if (bcat(p)==='shell'||/shell/i.test(c)) key='shell';
+    else if (p.group==='research') key='labs';
+    else if (p.group==='core') key='sharedlabs';
+    else {
+      if (c==='Collaboration') key='collab';
+      else if (c==='Community') key='community';
+      else if (c==='Classroom') key='classroom';
+      else if (c==='Event') key='event';
+      else if (c==='Teaching Lab'||c==='Learning Support') key='clubs';
+      else if (c==='Program Support') key='progsupport';
+      else key='progsupport';
+    }
+    B[key]+=p.cost||0; D[key]+=p.dgsf||0;
+  });
+  return { cost:B, dgsf:D, byType:byType };
+}
+
+function _buildScenarioCostsSheet(wb) {
+  var scs = S.scenarios || [];
+  if (!scs.length) return;
+  var ws = {};
+  ws['!merges'] = [];
+  ws['!rows'] = [];
+  function rowH(r,h){ ws['!rows'][r-1]={hpt:h}; }
+  function colL(c){ return _xa(1,c).replace(/[0-9]/g,''); }
+  var nS = scs.length;
+
+  var TYPES = (S.types||[]).map(function(t){ return {id:t.id, label:t.label}; });
+
+  var per = scs.map(function(sc){
+    var cc = sc.data && sc.data.cost ? sc.data.cost : {};
+    var bm = sc.state && sc.state.cost ? sc.state.cost.benchMap : null;
+    var cat = _fitoutTemplateCats(cc, bm);
+    var st = sc.state && sc.state.cost ? sc.state.cost : {};
+    var pct = {
+      design: st.designContingencyPct||0, constr: st.constructionContingencyPct||0,
+      esc: cc.escalationPct||0, tariff: (cc.tariffPct!=null?cc.tariffPct:(st.tariffPct||0)),
+      prof: st.professionalServicesPct||0, owner: st.ownerWorkPct||0,
+      projc: st.projectContingencyPct||0, permit: st.permitsPct||0, pm: st.pmFeePct||0
+    };
+    pct.sigma = pct.design+pct.constr+pct.esc+pct.tariff+pct.prof+pct.owner+pct.projc+pct.permit+pct.pm;
+    return { cc:cc, cat:cat, pct:pct, gsf:Math.round(sc.data.totalGSF||0), name:sc.name, desc:sc.desc||'' };
+  });
+
+  function base(s){ return 3 + s*5; }
+  function rCol(s){ return base(s); }
+  function aCol(s){ return base(s)+1; }
+  function pCol(s){ return base(s)+2; }
+  function fCol(s){ return base(s)+3; }
+  var lastCol = fCol(nS-1);
+
+  var cols=[]; cols[0]={wch:2}; cols[1]={wch:22.5};
+  for (var s=0;s<nS;s++){ cols[rCol(s)-1]={wch:9.5}; cols[aCol(s)-1]={wch:10.8}; cols[pCol(s)-1]={wch:6.8}; cols[fCol(s)-1]={wch:13.8}; if (s<nS-1) cols[fCol(s)]={wch:3.0}; }
+  ws['!cols']=cols;
+
+  var GRAY='D9D9D9';
+  var Zr='"$"#,##0', Za='#,##0', Zp='0%';
+  var bTB={top:{style:'thin'},bottom:{style:'thin'}}, bB={bottom:{style:'thin'}}, bT={top:{style:'thin'}}, bMT={top:{style:'medium'}}, bKT={top:{style:'thick'}};
+
+  // Title blocks (rows 3-5) per scenario
+  scs.forEach(function(sc,s){
+    var c0=rCol(s), c1=fCol(s);
+    rowH(3,22); rowH(4,20); rowH(5,16);
+    _xset(ws,3,c0,{ v:per[s].name, s:_xstyle({fill:GRAY,bold:true,size:18,halign:'center',valign:'center',border:{top:{style:'medium'},left:{style:'medium'}}}) });
+    for (var c=c0+1;c<=c1;c++) _xset(ws,3,c,{ s:_xstyle({fill:GRAY,border:(c===c1?{top:{style:'medium'},right:{style:'medium'}}:{top:{style:'medium'}})}) });
+    _xset(ws,4,c0,{ v:'stacking / image here', s:_xstyle({halign:'center',valign:'center',border:{left:{style:'medium'}}}) });
+    for (var c2=c0+1;c2<=c1;c2++) _xset(ws,4,c2,{ s:_xstyle(c2===c1?{border:{right:{style:'medium'}}}:{}) });
+    _xset(ws,5,c0,{ v:per[s].desc, s:_xstyle({fill:GRAY,size:11,halign:'left',valign:'center',indent:1,border:{bottom:{style:'medium'},left:{style:'medium'}}}) });
+    for (var c3=c0+1;c3<=c1;c3++) _xset(ws,5,c3,{ s:_xstyle({fill:GRAY,border:(c3===c1?{bottom:{style:'medium'},right:{style:'medium'}}:{bottom:{style:'medium'}})}) });
+    ws['!merges'].push({s:{r:2,c:c0-1},e:{r:2,c:c1-1}});
+    ws['!merges'].push({s:{r:3,c:c0-1},e:{r:3,c:c1-1}});
+    ws['!merges'].push({s:{r:4,c:c0-1},e:{r:4,c:c1-1}});
+  });
+
+  // Header row 6
+  rowH(6,14);
+  _xset(ws,6,2,{ v:'Cost Item', s:_xstyle({size:8,halign:'left',valign:'center',border:bB}) });
+  scs.forEach(function(sc,s){
+    _xset(ws,6,rCol(s),{ v:'Cost / SF', s:_xstyle({size:8,halign:'center',valign:'center',border:bB,wrap:true}) });
+    _xset(ws,6,aCol(s),{ v:'Area (DGSF)', s:_xstyle({size:8,halign:'center',valign:'center',border:bB,wrap:true}) });
+    _xset(ws,6,pCol(s),{ v:'%', s:_xstyle({size:8,halign:'center',valign:'center',border:bB}) });
+    _xset(ws,6,fCol(s),{ v:'Cost', s:_xstyle({size:8,halign:'right',valign:'center',border:bB}) });
+  });
+
+  // Row map
+  var R={ research:7, labs:8, pioffice:9, sharedlabs:10, collab:11, contingency:12,
+    community:14, classroom:15, event:16, clubs:17, deansoffice:18, farley:19, progsupport:20, shell:21,
+    subtotal:22, core:23, site:24, constr:25, design:26, ccon:27, esc:28, tariff:29, hard:30,
+    prof:32, owner:33, projc:34, permit:35, pm:36, soft:37, total:39, ppg:40, pititle:42 };
+  var fitChildren=['labs','pioffice','sharedlabs','collab','contingency'];
+
+  // Label column B (shared)
+  function setLbl(r,label,opt){ opt=opt||{}; _xset(ws,r,2,{ v:label, s:_xstyle({size:opt.size||10,bold:opt.bold,halign:'left',valign:'center',indent:opt.indent!==undefined?opt.indent:0,border:opt.border}) }); }
+  setLbl(R.research,'Research',{indent:1,border:bTB});
+  setLbl(R.labs,'Labs',{indent:3,border:bB});
+  setLbl(R.pioffice,'PI Office & Desks',{indent:3,border:bTB});
+  setLbl(R.sharedlabs,'Shared Labs',{indent:3,border:bTB});
+  setLbl(R.collab,'Collaboration',{indent:3,border:bTB});
+  setLbl(R.contingency,'Unallocated',{indent:3,border:bTB});
+  setLbl(R.community,'Community',{indent:1,border:bTB});
+  setLbl(R.classroom,'Classroom',{indent:1,border:bTB});
+  setLbl(R.event,'Event',{indent:1,border:bTB});
+  setLbl(R.clubs,'Clubs',{indent:1,border:bTB});
+  setLbl(R.deansoffice,"Dean's Office",{indent:1,border:bTB});
+  setLbl(R.farley,'Farley Center',{indent:1,border:bTB});
+  setLbl(R.progsupport,'Program Support',{indent:1,border:bTB});
+  setLbl(R.shell,'Shell',{indent:1,border:bTB});
+  setLbl(R.subtotal,'Fit-Out Subtotals',{indent:1});
+  setLbl(R.core,'Core & Shell',{indent:2,border:bTB});
+  setLbl(R.site,'Site',{indent:2,border:bT});
+  setLbl(R.constr,'Construction + Gen. Cond.',{indent:1,border:bT});
+  setLbl(R.design,'Design Contingency',{indent:1,border:bTB});
+  setLbl(R.ccon,'Construction Contingency',{indent:1,border:bTB});
+  setLbl(R.esc,'Escalation',{indent:1,border:bTB});
+  setLbl(R.tariff,'Tariff',{indent:1,border:bTB});
+  setLbl(R.hard,'Hard Construction Cost',{bold:true,border:bMT});
+  setLbl(R.prof,'Professional Services',{indent:1,border:bTB});
+  setLbl(R.owner,'Owner Work',{indent:1,border:bTB});
+  setLbl(R.projc,'Project Contingency',{indent:1,border:bTB});
+  setLbl(R.permit,'Permits',{indent:1,border:bTB});
+  setLbl(R.pm,'Project Management Fee',{indent:1,border:bTB});
+  setLbl(R.soft,'Soft Costs',{bold:true,border:bMT});
+  setLbl(R.total,'Total Project Cost',{border:bKT});
+  setLbl(R.ppg,'$ / GSF (project)',{});
+  setLbl(R.pititle,'PI Typologies',{bold:true});
+  TYPES.forEach(function(t,i){ setLbl(R.pititle+1+i, t.label, {indent:1,border:bTB}); });
+
+  // Per-scenario value columns
+  scs.forEach(function(sc,s){
+    var rc=colL(rCol(s)), ac=colL(aCol(s)), pc=colL(pCol(s)), fc=colL(fCol(s));
+    var P=per[s], CAT=P.cat;
+    var subF=fc+'$'+R.subtotal, totF=fc+'$'+R.total, labsF=fc+R.labs;
+    function cell(r,col,o){ _xset(ws,r,col,o); }
+    function rate(r,v){ cell(r,rCol(s),{ v:v, z:Zr, s:_xstyle({size:10,halign:'right',valign:'center',border:bTB}) }); }
+    function area(r,v){ cell(r,aCol(s),{ v:v, z:Za, s:_xstyle({size:10,halign:'right',valign:'center',border:bTB}) }); }
+    function pctC(r,den){ cell(r,pCol(s),{ f:fc+r+'/'+den, z:Zp, s:_xstyle({size:8,halign:'center',valign:'center',border:bTB}) }); }
+    function costF(r,f,bd,bold){ cell(r,fCol(s),{ f:f, z:Zr, s:_xstyle({size:10,bold:bold,halign:'right',valign:'center',border:bd||bTB}) }); }
+    function blankCell(r,col,bd){ cell(r,col,{ s:_xstyle({size:10,border:bd}) }); }
+
+    // Research group
+    blankCell(R.research,rCol(s),bTB);
+    cell(R.research,aCol(s),{ f:'SUM('+ac+R.labs+':'+ac+R.contingency+')', z:Za, s:_xstyle({size:10,halign:'right',valign:'center',border:bTB}) });
+    pctC(R.research,subF);
+    cell(R.research,fCol(s),{ f:'SUM('+fc+R.labs+':'+fc+R.contingency+')', z:Zr, s:_xstyle({size:10,halign:'right',valign:'center',border:bTB}) });
+
+    function catRow(rowN,key){
+      var a=Math.round((CAT.dgsf[key]||0)), cst=CAT.cost[key]||0, rt= a>0? cst/a : 0;
+      rate(rowN,rt); area(rowN,a); costF(rowN, ac+rowN+'*'+rc+rowN); pctC(rowN,subF);
+    }
+    catRow(R.labs,'labs'); catRow(R.pioffice,'pioffice'); catRow(R.sharedlabs,'sharedlabs'); catRow(R.collab,'collab'); catRow(R.contingency,'contingency');
+    catRow(R.community,'community'); catRow(R.classroom,'classroom'); catRow(R.event,'event'); catRow(R.clubs,'clubs');
+    catRow(R.deansoffice,'deansoffice'); catRow(R.farley,'farley'); catRow(R.progsupport,'progsupport'); catRow(R.shell,'shell');
+
+    // Fit-Out Subtotals (no borders, like template)
+    blankCell(R.subtotal,rCol(s),null);
+    cell(R.subtotal,aCol(s),{ f:'SUM('+ac+R.labs+':'+ac+R.shell+')', z:Za, s:_xstyle({size:10,halign:'right',valign:'center'}) });
+    cell(R.subtotal,pCol(s),{ f:fc+R.subtotal+'/'+totF, z:Zp, s:_xstyle({size:8,halign:'center',valign:'center'}) });
+    cell(R.subtotal,fCol(s),{ f:'SUM('+fc+R.labs+':'+fc+R.shell+')', z:Zr, s:_xstyle({size:10,halign:'right',valign:'center'}) });
+
+    // Core & Shell + Site
+    function bwRow(rowN,costKey,bd){
+      var g=P.gsf, cst=Math.round((P.cc[costKey])||0), rt=g>0?cst/g:0;
+      cell(rowN,rCol(s),{ v:rt, z:Zr, s:_xstyle({size:10,halign:'right',valign:'center',border:bd}) });
+      cell(rowN,aCol(s),{ v:g, z:Za, s:_xstyle({size:10,halign:'right',valign:'center',border:bd}) });
+      cell(rowN,fCol(s),{ f:ac+rowN+'*'+rc+rowN, z:Zr, s:_xstyle({size:10,halign:'right',valign:'center',border:bd}) });
+      cell(rowN,pCol(s),{ f:fc+rowN+'/'+totF, z:Zp, s:_xstyle({size:8,halign:'center',valign:'center',border:bd}) });
+    }
+    bwRow(R.core,'totalCoreShell',bTB);
+    bwRow(R.site,'totalSite',bT);
+
+    // Construction + Gen. Cond.
+    blankCell(R.constr,rCol(s),bT); blankCell(R.constr,aCol(s),bT);
+    costF(R.constr, fc+R.subtotal+'+'+fc+R.core+'+'+fc+R.site, bT);
+    cell(R.constr,pCol(s),{ f:fc+R.constr+'/'+totF, z:Zp, s:_xstyle({size:8,halign:'center',valign:'center',border:bT}) });
+
+    // markup/soft live formulas: cost = constr/(1-sigma)*pct
+    var sig = P.pct.sigma.toFixed(6);
+    function projPct(p){ return fc+R.constr+'/(1-'+sig+')*'+(p).toFixed(6); }
+    function mkRow(rowN,p,bd){
+      blankCell(rowN,rCol(s),bd); blankCell(rowN,aCol(s),bd);
+      costF(rowN, projPct(p), bd);
+      cell(rowN,pCol(s),{ f:fc+rowN+'/'+totF, z:Zp, s:_xstyle({size:8,halign:'center',valign:'center',border:bd}) });
+    }
+    mkRow(R.design,P.pct.design,bTB); mkRow(R.ccon,P.pct.constr,bTB); mkRow(R.esc,P.pct.esc,bTB); mkRow(R.tariff,P.pct.tariff,bTB);
+
+    // Hard Construction Cost
+    blankCell(R.hard,rCol(s),bMT); blankCell(R.hard,aCol(s),bMT);
+    costF(R.hard, fc+R.constr+'+'+fc+R.design+'+'+fc+R.ccon+'+'+fc+R.esc+'+'+fc+R.tariff, bMT, true);
+    cell(R.hard,pCol(s),{ f:fc+R.hard+'/'+totF, z:Zp, s:_xstyle({size:8,bold:true,halign:'center',valign:'center',border:bMT}) });
+
+    mkRow(R.prof,P.pct.prof,bTB); mkRow(R.owner,P.pct.owner,bTB); mkRow(R.projc,P.pct.projc,bTB); mkRow(R.permit,P.pct.permit,bTB); mkRow(R.pm,P.pct.pm,bTB);
+
+    // Soft Costs
+    blankCell(R.soft,rCol(s),bMT); blankCell(R.soft,aCol(s),bMT);
+    costF(R.soft, fc+R.prof+'+'+fc+R.owner+'+'+fc+R.projc+'+'+fc+R.permit+'+'+fc+R.pm, bMT, true);
+    cell(R.soft,pCol(s),{ f:fc+R.soft+'/'+totF, z:Zp, s:_xstyle({size:8,bold:true,halign:'center',valign:'center',border:bMT}) });
+
+    // Total Project Cost
+    blankCell(R.total,rCol(s),bKT); blankCell(R.total,aCol(s),bKT);
+    costF(R.total, fc+R.hard+'+'+fc+R.soft, bKT, true);
+    cell(R.total,pCol(s),{ f:fc+R.total+'/'+totF, z:Zp, s:_xstyle({size:8,halign:'center',valign:'center',border:bKT}) });
+
+    // $/GSF (project)
+    cell(R.ppg,aCol(s),{ v:P.gsf, z:Za, s:_xstyle({size:10,halign:'right',valign:'center'}) });
+    cell(R.ppg,fCol(s),{ f:fc+R.total+'/'+ac+R.ppg, z:Zr, s:_xstyle({size:10,halign:'right',valign:'center'}) });
+
+    // PI Typologies
+    TYPES.forEach(function(t,i){
+      var rowN=R.pititle+1+i, o=CAT.byType[t.id]||{cost:0,dgsf:0};
+      var a=Math.round(o.dgsf||0), cst=o.cost||0, rt=a>0?cst/a:0;
+      rate(rowN,rt); area(rowN,a); costF(rowN, ac+rowN+'*'+rc+rowN);
+      cell(rowN,pCol(s),{ f:fc+rowN+'/'+labsF, z:Zp, s:_xstyle({size:8,halign:'center',valign:'center',border:bTB}) });
+    });
+  });
+
+  ws['!ref']='A1:'+_xa(R.pititle+TYPES.length+2, lastCol+1);
+  XLSX.utils.book_append_sheet(wb, ws, 'Scenario Costs');
+}
 
 function exportXLSX() {
   if (typeof XLSX === 'undefined') { alert('Excel library not loaded yet \u2014 please reload the page and try again.'); return; }
   var wb = XLSX.utils.book_new();
   var ctx = _buildProgramSheet(wb);
   _buildCostSheet(wb, ctx);
+  _buildScenarioCostsSheet(wb);
   XLSX.writeFile(wb, 'Northwestern_NEB_Program_Export_' + new Date().toISOString().slice(0,10) + '.xlsx');
 }
 
@@ -11643,6 +12000,8 @@ window._skillUpdateMep = function(rowId, field, val) {
 })();
 
 buildPresetScenarios();
+_enforceGlobalCostDefaults();
+if (typeof _recomputeScenarioData === 'function') _recomputeScenarioData();
 render();
 
 
