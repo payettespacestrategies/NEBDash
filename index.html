@@ -273,6 +273,7 @@ footer .ft-right{display:flex;align-items:center;gap:12px}
 <footer><div class="ft-left"><button class="btn btn-navy" onclick="exportJSON()">Export JSON</button><button class="btn btn-out" onclick="document.getElementById('importJsonInput').click()">Import JSON</button><input type="file" id="importJsonInput" accept=".json,application/json" style="display:none" onchange="importJSON(event)"><button class="btn btn-navy" onclick="exportXLSX()">Export Excel</button><button class="btn btn-out" onclick="printDashboard()">Print</button></div><div class="ft-right"><span id="ts"></span> &nbsp;|&nbsp; <span style="opacity:.7">Generated 2026-05-06 · skill v0.5</span></div></footer>
 </div>
 
+<script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/xlsx-js-style@1.2.0/dist/xlsx.bundle.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.9.0/d3.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/d3-sankey@0.12.3/dist/d3-sankey.min.js"></script>
@@ -1192,7 +1193,7 @@ function render() {
   else if (activeTab === 9) el.innerHTML = renderLabModule();
   else if (activeTab === 10) { el.innerHTML = renderVisualizations(d); mountD3Visuals(d); }
   else if (activeTab === 11) el.innerHTML = renderMEP(d);
-  if (TABS[activeTab] === 'Cost') _enhanceCostCaptions();
+  if (typeof _enhanceCaptions === 'function') _enhanceCaptions();
   document.getElementById('ts').textContent = new Date().toLocaleString();
 }
 
@@ -4644,11 +4645,16 @@ function _capHash(s) {
   for (var i = 0; i < s.length; i++) { h = (h * 31 + s.charCodeAt(i)) | 0; }
   return 'c' + (h >>> 0).toString(36);
 }
-function _enhanceCostCaptions() {
-  var root = document.querySelector('.cost-roboto'); if (!root) return;
+// v0.8.19: make the grey caption text editable on EVERY tab (was Cost only).
+// Scopes to the whole #content area and enhances the grey .card-sub captions.
+// Edits persist in S.captions keyed by a hash of the default text, so they
+// survive re-renders.
+function _enhanceCaptions() {
+  var root = document.getElementById('content'); if (!root) return;
   S.captions = S.captions || {};
   var els = root.querySelectorAll('.card-sub');
   Array.prototype.forEach.call(els, function(el) {
+    if (el.getAttribute('data-capkey')) return; // already wired this render
     var key = _capHash(el.innerHTML);
     el.setAttribute('data-capkey', key);
     if (S.captions[key] != null) el.innerHTML = S.captions[key];
@@ -4664,6 +4670,8 @@ function _enhanceCostCaptions() {
     });
   });
 }
+// Back-compat alias (was Cost-only).
+function _enhanceCostCaptions() { _enhanceCaptions(); }
 
 // v0.7.6: scenario picker shown at the top of every tab — select a scenario to
 // load its full state, or "Working state" to keep editing without a scenario.
@@ -6112,6 +6120,7 @@ function _buildScenarioCostsSheet(wb) {
   ws['!cols']=cols;
 
   var GRAY='D9D9D9';
+  function xs(o){ o=o||{}; if(o.black){ o.font='Roboto Black'; delete o.black; } else if(!o.font){ o.font='Roboto Light'; } return _xstyle(o); }
   var Zr='"$"#,##0', Za='#,##0', Zp='0%';
   var bTB={top:{style:'thin'},bottom:{style:'thin'}}, bB={bottom:{style:'thin'}}, bT={top:{style:'thin'}}, bMT={top:{style:'medium'}}, bKT={top:{style:'thick'}};
 
@@ -6119,12 +6128,12 @@ function _buildScenarioCostsSheet(wb) {
   scs.forEach(function(sc,s){
     var c0=rCol(s), c1=fCol(s);
     rowH(3,22); rowH(4,20); rowH(5,16);
-    _xset(ws,3,c0,{ v:per[s].name, s:_xstyle({fill:GRAY,bold:true,size:18,halign:'center',valign:'center',border:{top:{style:'medium'},left:{style:'medium'}}}) });
-    for (var c=c0+1;c<=c1;c++) _xset(ws,3,c,{ s:_xstyle({fill:GRAY,border:(c===c1?{top:{style:'medium'},right:{style:'medium'}}:{top:{style:'medium'}})}) });
-    _xset(ws,4,c0,{ v:'stacking / image here', s:_xstyle({halign:'center',valign:'center',border:{left:{style:'medium'}}}) });
-    for (var c2=c0+1;c2<=c1;c2++) _xset(ws,4,c2,{ s:_xstyle(c2===c1?{border:{right:{style:'medium'}}}:{}) });
-    _xset(ws,5,c0,{ v:per[s].desc, s:_xstyle({fill:GRAY,size:11,halign:'left',valign:'center',indent:1,border:{bottom:{style:'medium'},left:{style:'medium'}}}) });
-    for (var c3=c0+1;c3<=c1;c3++) _xset(ws,5,c3,{ s:_xstyle({fill:GRAY,border:(c3===c1?{bottom:{style:'medium'},right:{style:'medium'}}:{bottom:{style:'medium'}})}) });
+    _xset(ws,3,c0,{ v:per[s].name, s:xs({fill:GRAY,black:true,size:18,halign:'center',valign:'center',border:{top:{style:'medium'},left:{style:'medium'}}}) });
+    for (var c=c0+1;c<=c1;c++) _xset(ws,3,c,{ s:xs({fill:GRAY,border:(c===c1?{top:{style:'medium'},right:{style:'medium'}}:{top:{style:'medium'}})}) });
+    _xset(ws,4,c0,{ v:'stacking / image here', s:xs({halign:'center',valign:'center',border:{left:{style:'medium'}}}) });
+    for (var c2=c0+1;c2<=c1;c2++) _xset(ws,4,c2,{ s:xs(c2===c1?{border:{right:{style:'medium'}}}:{}) });
+    _xset(ws,5,c0,{ v:per[s].desc, s:xs({fill:GRAY,size:11,halign:'left',valign:'center',indent:1,border:{bottom:{style:'medium'},left:{style:'medium'}}}) });
+    for (var c3=c0+1;c3<=c1;c3++) _xset(ws,5,c3,{ s:xs({fill:GRAY,border:(c3===c1?{bottom:{style:'medium'},right:{style:'medium'}}:{bottom:{style:'medium'}})}) });
     ws['!merges'].push({s:{r:2,c:c0-1},e:{r:2,c:c1-1}});
     ws['!merges'].push({s:{r:3,c:c0-1},e:{r:3,c:c1-1}});
     ws['!merges'].push({s:{r:4,c:c0-1},e:{r:4,c:c1-1}});
@@ -6132,12 +6141,12 @@ function _buildScenarioCostsSheet(wb) {
 
   // Header row 6
   rowH(6,14);
-  _xset(ws,6,2,{ v:'Cost Item', s:_xstyle({size:8,halign:'left',valign:'center',border:bB}) });
+  _xset(ws,6,2,{ v:'Cost Item', s:xs({size:8,halign:'left',valign:'center',border:bB}) });
   scs.forEach(function(sc,s){
-    _xset(ws,6,rCol(s),{ v:'Cost / SF', s:_xstyle({size:8,halign:'center',valign:'center',border:bB,wrap:true}) });
-    _xset(ws,6,aCol(s),{ v:'Area (DGSF)', s:_xstyle({size:8,halign:'center',valign:'center',border:bB,wrap:true}) });
-    _xset(ws,6,pCol(s),{ v:'%', s:_xstyle({size:8,halign:'center',valign:'center',border:bB}) });
-    _xset(ws,6,fCol(s),{ v:'Cost', s:_xstyle({size:8,halign:'right',valign:'center',border:bB}) });
+    _xset(ws,6,rCol(s),{ v:'Cost / SF', s:xs({size:8,halign:'center',valign:'center',border:bB,wrap:true}) });
+    _xset(ws,6,aCol(s),{ v:'Area (DGSF)', s:xs({size:8,halign:'center',valign:'center',border:bB,wrap:true}) });
+    _xset(ws,6,pCol(s),{ v:'%', s:xs({size:8,halign:'center',valign:'center',border:bB}) });
+    _xset(ws,6,fCol(s),{ v:'Cost', s:xs({size:8,halign:'right',valign:'center',border:bB}) });
   });
 
   // Row map
@@ -6148,7 +6157,7 @@ function _buildScenarioCostsSheet(wb) {
   var fitChildren=['labs','pioffice','sharedlabs','collab','contingency'];
 
   // Label column B (shared)
-  function setLbl(r,label,opt){ opt=opt||{}; _xset(ws,r,2,{ v:label, s:_xstyle({size:opt.size||10,bold:opt.bold,halign:'left',valign:'center',indent:opt.indent!==undefined?opt.indent:0,border:opt.border}) }); }
+  function setLbl(r,label,opt){ opt=opt||{}; _xset(ws,r,2,{ v:label, s:xs({size:opt.size||10,bold:opt.bold,black:opt.black,halign:'left',valign:'center',indent:opt.indent!==undefined?opt.indent:0,border:opt.border}) }); }
   setLbl(R.research,'Research',{indent:1,border:bTB});
   setLbl(R.labs,'Labs',{indent:3,border:bB});
   setLbl(R.pioffice,'PI Office & Desks',{indent:3,border:bTB});
@@ -6178,7 +6187,7 @@ function _buildScenarioCostsSheet(wb) {
   setLbl(R.permit,'Permits',{indent:1,border:bTB});
   setLbl(R.pm,'Project Management Fee',{indent:1,border:bTB});
   setLbl(R.soft,'Soft Costs',{bold:true,border:bMT});
-  setLbl(R.total,'Total Project Cost',{border:bKT});
+  setLbl(R.total,'Total Project Cost',{border:bKT,black:true});
   setLbl(R.ppg,'$ / GSF (project)',{});
   setLbl(R.pititle,'PI Typologies',{bold:true});
   TYPES.forEach(function(t,i){ setLbl(R.pititle+1+i, t.label, {indent:1,border:bTB}); });
@@ -6189,17 +6198,17 @@ function _buildScenarioCostsSheet(wb) {
     var P=per[s], CAT=P.cat;
     var subF=fc+'$'+R.subtotal, totF=fc+'$'+R.total, labsF=fc+R.labs;
     function cell(r,col,o){ _xset(ws,r,col,o); }
-    function rate(r,v){ cell(r,rCol(s),{ v:v, z:Zr, s:_xstyle({size:10,halign:'right',valign:'center',border:bTB}) }); }
-    function area(r,v){ cell(r,aCol(s),{ v:v, z:Za, s:_xstyle({size:10,halign:'right',valign:'center',border:bTB}) }); }
-    function pctC(r,den){ cell(r,pCol(s),{ f:fc+r+'/'+den, z:Zp, s:_xstyle({size:8,halign:'center',valign:'center',border:bTB}) }); }
-    function costF(r,f,bd,bold){ cell(r,fCol(s),{ f:f, z:Zr, s:_xstyle({size:10,bold:bold,halign:'right',valign:'center',border:bd||bTB}) }); }
-    function blankCell(r,col,bd){ cell(r,col,{ s:_xstyle({size:10,border:bd}) }); }
+    function rate(r,v){ cell(r,rCol(s),{ v:v, z:Zr, s:xs({size:10,halign:'right',valign:'center',border:bTB}) }); }
+    function area(r,v){ cell(r,aCol(s),{ v:v, z:Za, s:xs({size:10,halign:'right',valign:'center',border:bTB}) }); }
+    function pctC(r,den){ cell(r,pCol(s),{ f:fc+r+'/'+den, z:Zp, s:xs({size:8,halign:'center',valign:'center',border:bTB}) }); }
+    function costF(r,f,bd,bold,black){ cell(r,fCol(s),{ f:f, z:Zr, s:xs({size:10,bold:bold,black:black,halign:'right',valign:'center',border:bd||bTB}) }); }
+    function blankCell(r,col,bd){ cell(r,col,{ s:xs({size:10,border:bd}) }); }
 
     // Research group
     blankCell(R.research,rCol(s),bTB);
-    cell(R.research,aCol(s),{ f:'SUM('+ac+R.labs+':'+ac+R.contingency+')', z:Za, s:_xstyle({size:10,halign:'right',valign:'center',border:bTB}) });
+    cell(R.research,aCol(s),{ f:'SUM('+ac+R.labs+':'+ac+R.contingency+')', z:Za, s:xs({size:10,halign:'right',valign:'center',border:bTB}) });
     pctC(R.research,subF);
-    cell(R.research,fCol(s),{ f:'SUM('+fc+R.labs+':'+fc+R.contingency+')', z:Zr, s:_xstyle({size:10,halign:'right',valign:'center',border:bTB}) });
+    cell(R.research,fCol(s),{ f:'SUM('+fc+R.labs+':'+fc+R.contingency+')', z:Zr, s:xs({size:10,halign:'right',valign:'center',border:bTB}) });
 
     function catRow(rowN,key){
       var a=Math.round((CAT.dgsf[key]||0)), cst=CAT.cost[key]||0, rt= a>0? cst/a : 0;
@@ -6211,17 +6220,17 @@ function _buildScenarioCostsSheet(wb) {
 
     // Fit-Out Subtotals (no borders, like template)
     blankCell(R.subtotal,rCol(s),null);
-    cell(R.subtotal,aCol(s),{ f:'SUM('+ac+R.labs+':'+ac+R.shell+')', z:Za, s:_xstyle({size:10,halign:'right',valign:'center'}) });
-    cell(R.subtotal,pCol(s),{ f:fc+R.subtotal+'/'+totF, z:Zp, s:_xstyle({size:8,halign:'center',valign:'center'}) });
-    cell(R.subtotal,fCol(s),{ f:'SUM('+fc+R.labs+':'+fc+R.shell+')', z:Zr, s:_xstyle({size:10,halign:'right',valign:'center'}) });
+    cell(R.subtotal,aCol(s),{ f:'SUM('+ac+R.labs+':'+ac+R.shell+')', z:Za, s:xs({size:10,halign:'right',valign:'center'}) });
+    cell(R.subtotal,pCol(s),{ f:fc+R.subtotal+'/'+totF, z:Zp, s:xs({size:8,halign:'center',valign:'center'}) });
+    cell(R.subtotal,fCol(s),{ f:'SUM('+fc+R.labs+':'+fc+R.shell+')', z:Zr, s:xs({size:10,halign:'right',valign:'center'}) });
 
     // Core & Shell + Site
     function bwRow(rowN,costKey,bd){
       var g=P.gsf, cst=Math.round((P.cc[costKey])||0), rt=g>0?cst/g:0;
-      cell(rowN,rCol(s),{ v:rt, z:Zr, s:_xstyle({size:10,halign:'right',valign:'center',border:bd}) });
-      cell(rowN,aCol(s),{ v:g, z:Za, s:_xstyle({size:10,halign:'right',valign:'center',border:bd}) });
-      cell(rowN,fCol(s),{ f:ac+rowN+'*'+rc+rowN, z:Zr, s:_xstyle({size:10,halign:'right',valign:'center',border:bd}) });
-      cell(rowN,pCol(s),{ f:fc+rowN+'/'+totF, z:Zp, s:_xstyle({size:8,halign:'center',valign:'center',border:bd}) });
+      cell(rowN,rCol(s),{ v:rt, z:Zr, s:xs({size:10,halign:'right',valign:'center',border:bd}) });
+      cell(rowN,aCol(s),{ v:g, z:Za, s:xs({size:10,halign:'right',valign:'center',border:bd}) });
+      cell(rowN,fCol(s),{ f:ac+rowN+'*'+rc+rowN, z:Zr, s:xs({size:10,halign:'right',valign:'center',border:bd}) });
+      cell(rowN,pCol(s),{ f:fc+rowN+'/'+totF, z:Zp, s:xs({size:8,halign:'center',valign:'center',border:bd}) });
     }
     bwRow(R.core,'totalCoreShell',bTB);
     bwRow(R.site,'totalSite',bT);
@@ -6229,7 +6238,7 @@ function _buildScenarioCostsSheet(wb) {
     // Construction + Gen. Cond.
     blankCell(R.constr,rCol(s),bT); blankCell(R.constr,aCol(s),bT);
     costF(R.constr, fc+R.subtotal+'+'+fc+R.core+'+'+fc+R.site, bT);
-    cell(R.constr,pCol(s),{ f:fc+R.constr+'/'+totF, z:Zp, s:_xstyle({size:8,halign:'center',valign:'center',border:bT}) });
+    cell(R.constr,pCol(s),{ f:fc+R.constr+'/'+totF, z:Zp, s:xs({size:8,halign:'center',valign:'center',border:bT}) });
 
     // markup/soft live formulas: cost = constr/(1-sigma)*pct
     var sig = P.pct.sigma.toFixed(6);
@@ -6237,37 +6246,37 @@ function _buildScenarioCostsSheet(wb) {
     function mkRow(rowN,p,bd){
       blankCell(rowN,rCol(s),bd); blankCell(rowN,aCol(s),bd);
       costF(rowN, projPct(p), bd);
-      cell(rowN,pCol(s),{ f:fc+rowN+'/'+totF, z:Zp, s:_xstyle({size:8,halign:'center',valign:'center',border:bd}) });
+      cell(rowN,pCol(s),{ f:fc+rowN+'/'+totF, z:Zp, s:xs({size:8,halign:'center',valign:'center',border:bd}) });
     }
     mkRow(R.design,P.pct.design,bTB); mkRow(R.ccon,P.pct.constr,bTB); mkRow(R.esc,P.pct.esc,bTB); mkRow(R.tariff,P.pct.tariff,bTB);
 
     // Hard Construction Cost
     blankCell(R.hard,rCol(s),bMT); blankCell(R.hard,aCol(s),bMT);
     costF(R.hard, fc+R.constr+'+'+fc+R.design+'+'+fc+R.ccon+'+'+fc+R.esc+'+'+fc+R.tariff, bMT, true);
-    cell(R.hard,pCol(s),{ f:fc+R.hard+'/'+totF, z:Zp, s:_xstyle({size:8,bold:true,halign:'center',valign:'center',border:bMT}) });
+    cell(R.hard,pCol(s),{ f:fc+R.hard+'/'+totF, z:Zp, s:xs({size:8,bold:true,halign:'center',valign:'center',border:bMT}) });
 
     mkRow(R.prof,P.pct.prof,bTB); mkRow(R.owner,P.pct.owner,bTB); mkRow(R.projc,P.pct.projc,bTB); mkRow(R.permit,P.pct.permit,bTB); mkRow(R.pm,P.pct.pm,bTB);
 
     // Soft Costs
     blankCell(R.soft,rCol(s),bMT); blankCell(R.soft,aCol(s),bMT);
     costF(R.soft, fc+R.prof+'+'+fc+R.owner+'+'+fc+R.projc+'+'+fc+R.permit+'+'+fc+R.pm, bMT, true);
-    cell(R.soft,pCol(s),{ f:fc+R.soft+'/'+totF, z:Zp, s:_xstyle({size:8,bold:true,halign:'center',valign:'center',border:bMT}) });
+    cell(R.soft,pCol(s),{ f:fc+R.soft+'/'+totF, z:Zp, s:xs({size:8,bold:true,halign:'center',valign:'center',border:bMT}) });
 
     // Total Project Cost
     blankCell(R.total,rCol(s),bKT); blankCell(R.total,aCol(s),bKT);
-    costF(R.total, fc+R.hard+'+'+fc+R.soft, bKT, true);
-    cell(R.total,pCol(s),{ f:fc+R.total+'/'+totF, z:Zp, s:_xstyle({size:8,halign:'center',valign:'center',border:bKT}) });
+    costF(R.total, fc+R.hard+'+'+fc+R.soft, bKT, true, true);
+    cell(R.total,pCol(s),{ f:fc+R.total+'/'+totF, z:Zp, s:xs({size:8,halign:'center',valign:'center',border:bKT}) });
 
     // $/GSF (project)
-    cell(R.ppg,aCol(s),{ v:P.gsf, z:Za, s:_xstyle({size:10,halign:'right',valign:'center'}) });
-    cell(R.ppg,fCol(s),{ f:fc+R.total+'/'+ac+R.ppg, z:Zr, s:_xstyle({size:10,halign:'right',valign:'center'}) });
+    cell(R.ppg,aCol(s),{ v:P.gsf, z:Za, s:xs({size:10,halign:'right',valign:'center'}) });
+    cell(R.ppg,fCol(s),{ f:fc+R.total+'/'+ac+R.ppg, z:Zr, s:xs({size:10,halign:'right',valign:'center'}) });
 
     // PI Typologies
     TYPES.forEach(function(t,i){
       var rowN=R.pititle+1+i, o=CAT.byType[t.id]||{cost:0,dgsf:0};
       var a=Math.round(o.dgsf||0), cst=o.cost||0, rt=a>0?cst/a:0;
       rate(rowN,rt); area(rowN,a); costF(rowN, ac+rowN+'*'+rc+rowN);
-      cell(rowN,pCol(s),{ f:fc+rowN+'/'+labsF, z:Zp, s:_xstyle({size:8,halign:'center',valign:'center',border:bTB}) });
+      cell(rowN,pCol(s),{ f:fc+rowN+'/'+labsF, z:Zp, s:xs({size:8,halign:'center',valign:'center',border:bTB}) });
     });
   });
 
@@ -6275,13 +6284,43 @@ function _buildScenarioCostsSheet(wb) {
   XLSX.utils.book_append_sheet(wb, ws, 'Scenario Costs');
 }
 
+function _downloadBlob(blob, filename) {
+  var url = URL.createObjectURL(blob);
+  var a = document.createElement('a');
+  a.href = url; a.download = filename; a.style.display = 'none';
+  document.body.appendChild(a); a.click();
+  setTimeout(function(){ document.body.removeChild(a); URL.revokeObjectURL(url); }, 150);
+}
 function exportXLSX() {
   if (typeof XLSX === 'undefined') { alert('Excel library not loaded yet \u2014 please reload the page and try again.'); return; }
   var wb = XLSX.utils.book_new();
   var ctx = _buildProgramSheet(wb);
   _buildCostSheet(wb, ctx);
   _buildScenarioCostsSheet(wb);
-  XLSX.writeFile(wb, 'Northwestern_NEB_Program_Export_' + new Date().toISOString().slice(0,10) + '.xlsx');
+  var fname = 'Northwestern_NEB_Program_Export_' + new Date().toISOString().slice(0,10) + '.xlsx';
+  // xlsx-js-style won't emit the sheet-level "hide gridlines" flag, so write to
+  // an array and post-process the worksheet XML with JSZip to inject
+  // showGridLines="0" on every sheet. Falls back to a plain write if JSZip
+  // isn't available.
+  var MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+  try {
+    var ab = XLSX.write(wb, { bookType:'xlsx', type:'array' });
+    if (typeof JSZip === 'undefined') { _downloadBlob(new Blob([ab], { type:MIME }), fname); return; }
+    JSZip.loadAsync(ab).then(function(zip){
+      var sheets = Object.keys(zip.files).filter(function(p){ return /^xl\/worksheets\/sheet\d+\.xml$/.test(p); });
+      return Promise.all(sheets.map(function(p){
+        return zip.file(p).async('string').then(function(xml){
+          if (xml.indexOf('showGridLines') === -1 && xml.indexOf('<sheetView ') !== -1) {
+            xml = xml.replace('<sheetView ', '<sheetView showGridLines="0" ');
+          }
+          zip.file(p, xml);
+        });
+      })).then(function(){ return zip.generateAsync({ type:'blob', mimeType:MIME }); })
+        .then(function(blob){ _downloadBlob(blob, fname); });
+    }).catch(function(err){ console.warn('gridline post-process failed, exporting as-is:', err); _downloadBlob(new Blob([ab], { type:MIME }), fname); });
+  } catch (e) {
+    XLSX.writeFile(wb, fname);
+  }
 }
 
 // Stub remaining old code (Summary/PI/Shared/Community/Neighborhood/Energy/Cost sheets)
@@ -8976,7 +9015,7 @@ render = function() {
     'Academic Space':     function() { el.innerHTML = renderAcademicSpaceV5(d); _apsApplyCols(); _skillInitDnD(); },
     'Floor Stacking':     function() { el.innerHTML = renderFloorStackingV5(d); _skillMoveVisual2(); _skillMountStackVisuals(d); _skillMountProgramFill(d); _skillStripDGSF(); },
     'Energy':             function() { el.innerHTML = renderEnergy(d); },
-    'Cost':               function() { el.innerHTML = renderCostV5(d); _enhanceCostCaptions(); },
+    'Cost':               function() { el.innerHTML = renderCostV5(d); },
     'Technical Criteria': function() { el.innerHTML = renderMEP(d); },
     'Scenarios':          function() { el.innerHTML = renderScenarios(d); },
     "N'hood":             function() { el.innerHTML = (typeof renderLabModule==='function') ? renderLabModule() : '<div class="card">Neighborhood module</div>'; },
@@ -8987,6 +9026,7 @@ render = function() {
                           }
   };
   if (dispatch[label]) dispatch[label]();
+  if (typeof _enhanceCaptions === 'function') _enhanceCaptions();
   document.getElementById('ts').textContent = new Date().toLocaleString();
 };
 
