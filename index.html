@@ -4531,6 +4531,13 @@ function renderScenarios(d) {
   });
   h += '</div>';
 
+  // v0.8.24: PI Mix | Research Mix | Space Mix row, just above the comparison.
+  h += '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;align-items:stretch;margin-bottom:12px">';
+  h += '<div class="card" style="min-width:0"><div class="card-title">PI Mix</div>'+renderLabMixSFTable()+'</div>';
+  h += '<div class="card" style="min-width:0"><div class="card-title">Research Mix</div>'+renderLabMixChart()+'</div>';
+  h += '<div class="card" style="min-width:0"><div class="card-title">Space Mix</div>'+renderComparisonChart()+'</div>';
+  h += '</div>';
+
   // ── COMPARISON TABLE ──
   h += '<div class="card"><div class="card-title">Scenario Comparison</div>';
   h += '<div style="overflow-x:auto">';
@@ -4580,14 +4587,6 @@ function renderScenarios(d) {
 
   // ── BUILDING POPULATION TABLE (standalone, screenshot-ready) ──
   h += renderPopulationTable();
-
-  // v0.8.20: three-across row — NSF by Typology table | Research Lab Mix
-  // Comparison | NASF Allocation Comparison (each ~1/3 page width).
-  h += '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;align-items:stretch;margin-top:12px">';
-  h += '<div class="card" style="min-width:0"><div class="card-title">NSF by Typology</div>'+renderLabMixSFTable()+'</div>';
-  h += '<div class="card" style="min-width:0"><div class="card-title">Research Mix</div>'+renderLabMixChart()+'</div>';
-  h += '<div class="card" style="min-width:0"><div class="card-title">Space Mix</div>'+renderComparisonChart()+'</div>';
-  h += '</div>';
 
   return h + '</div>';
 }
