@@ -2446,8 +2446,11 @@ function renderStacking(d) {
   h += '<div class="card-sub">Bar widths are proportional to floor plate GSF. Colored segments show assigned NASF. Labels at right show NASF, Departmental Gross (DGSF = GSF \u00d7 '+(S.deptGrossPct*100).toFixed(0)+'%), and Gross Square Feet (GSF). Shared split controlled on Tab 4. Per-floor PI assignment controlled below.</div>';
   h += '<div style="max-width:900px;margin:0 auto">';
 
-  // Determine max GSF for proportional widths
-  var maxFloorGSF = Math.max(S.basementGSF, S.aboveGradeGSF, S.penthouseGSF);
+  // Determine max GSF for proportional widths. v0.8.18: include the ground
+  // floor plate — when it's enlarged beyond the other plates it was driving the
+  // bar past 100% width and overlapping the right-hand data labels.
+  var _gfGSFforMax = (S.groundFloorGSF != null) ? S.groundFloorGSF : S.aboveGradeGSF;
+  var maxFloorGSF = Math.max(S.basementGSF, S.aboveGradeGSF, S.penthouseGSF, _gfGSFforMax);
 
   // v0.7.3: penthouse now shows program assigned to floor='penthouse' once its
   // efficiency is > 0, with any remaining NASF shown as building support.
@@ -9968,7 +9971,8 @@ function _skillBuildGFAFloorRows(d) {
   var supportHex = '#C2C3C8';
   var nasfHex = '#1B3A5C'; // same as var(--navy)
 
-  var maxFloorGSF = Math.max(S.basementGSF || 0, S.aboveGradeGSF || 0, S.penthouseGSF || 0) || 1;
+  var _gfGSFforMax2 = (S.groundFloorGSF != null) ? S.groundFloorGSF : S.aboveGradeGSF;
+  var maxFloorGSF = Math.max(S.basementGSF || 0, S.aboveGradeGSF || 0, S.penthouseGSF || 0, _gfGSFforMax2 || 0) || 1;
 
   function getCircPct(fk) {
     if (fs.circulation_per_floor && fs.circulation_per_floor[fk] != null) {
