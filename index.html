@@ -1271,6 +1271,18 @@ function masterLegend() {
     '</div>';
 }
 
+// v0.8.23: compact version of masterLegend for the side-by-side scenario charts.
+function masterLegendCompact() {
+  var items = [
+    ['var(--clrResearch)','Research Labs'], [FICM.office,'Faculty Office'],
+    ['var(--clrCore)','Shared Facilities'], ['var(--clrCommunity)','Community'],
+    ['var(--clrEvent)','Event'], ['var(--clrSupport)','Building Support'],
+    [FICM.supportB,'Unassigned']
+  ];
+  var h = '<div style="display:flex;flex-wrap:wrap;gap:2px 10px;margin-top:6px;font-size:.66rem;color:#5A5F66;line-height:1.2">';
+  items.forEach(function(it){ h += '<span style="display:inline-flex;align-items:center;gap:4px"><span style="width:8px;height:8px;border-radius:2px;background:'+it[0]+'"></span>'+it[1]+'</span>'; });
+  return h + '</div>';
+}
 function bigRow(label, val) {
   return '<div style="display:flex;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--bdr)"><span style="font-size:1.1rem;font-weight:500;color:var(--dk)">'+label+'</span><span style="font-family:\'IBM Plex Mono\',monospace;font-size:1.5rem;font-weight:700;color:var(--navy)">'+val+'</span></div>';
 }
@@ -5082,6 +5094,7 @@ function renderComparisonChart() {
   // viewBox 720x360) so the two charts' x-axes align side by side.
   var w = 720, h = 360, baseY = 306, scaleH = 250;
   var barW = Math.min(90, (w - 100) / S.scenarios.length - 20);
+  var lblFs = Math.max(8, Math.min(15, barW * 1.5 / 6));
   var maxVal = Math.max.apply(null, S.scenarios.map(function(sc){return sc.data.totalNASF}));
   var svg = '<svg viewBox="0 0 '+w+' '+h+'" style="width:100%;max-width:'+w+'px;font-family:Sora,sans-serif">';
 
@@ -5106,14 +5119,14 @@ function renderComparisonChart() {
       var totalH = maxVal>0?(totVal/maxVal*scaleH):0;
       svg += '<rect x="'+(x-1)+'" y="'+(baseY-totalH-1)+'" width="'+(barW+2)+'" height="'+(totalH+2)+'" fill="none" stroke="#1B3A5C" stroke-width="2.5" rx="3"/>';
     }
-    svg += '<text x="'+(x+barW/2)+'" y="'+(baseY+22)+'" text-anchor="middle" font-size="15" font-weight="'+(isActive?'900':'700')+'" fill="#1B3A5C">'+sc.name.substring(0,3)+'</text>';
-    var totalY = baseY - (maxVal>0?(totVal/maxVal*scaleH):0) - 8;
-    svg += '<text x="'+(x+barW/2)+'" y="'+totalY+'" text-anchor="middle" font-size="17" font-weight="900" fill="#1B3A5C">'+FMM(totVal)+'</text>';
+    svg += '<text x="'+(x+barW/2)+'" y="'+(baseY+18)+'" text-anchor="middle" font-size="'+lblFs.toFixed(1)+'" font-weight="'+(isActive?'900':'700')+'" fill="#1B3A5C">'+sc.name.substring(0,3)+'</text>';
+    var totalY = baseY - (maxVal>0?(totVal/maxVal*scaleH):0) - 6;
+    svg += '<text x="'+(x+barW/2)+'" y="'+totalY+'" text-anchor="middle" font-size="'+lblFs.toFixed(1)+'" font-weight="900" fill="#1B3A5C">'+F(totVal)+'</text>';
   });
   // v0.8.21: x-axis baseline line.
   svg += '<line x1="74" y1="'+baseY+'" x2="'+(w-14)+'" y2="'+baseY+'" stroke="#1B3A5C" stroke-width="1.5"/>';
   svg += '</svg>';
-  svg += masterLegend();
+  svg += masterLegendCompact();
   return svg;
 }
 
@@ -5128,6 +5141,9 @@ function renderLabMixChart() {
   var _lpad = 50, _rpad = 20;
   var _slot = (w - _lpad - _rpad) / n;
   var barW = Math.min(130, _slot * 0.62);
+  // v0.8.23: label font sized so the widest label ("NN PIs") fits the bar width;
+  // shared by the top label and the x-axis label so they match.
+  var lblFs = Math.max(8, Math.min(15, barW * 1.5 / 6));
   var maxVal = Math.max.apply(null, S.scenarios.map(function(sc){return sc.data.piNASF||1}));
   var chartTop = 56;        // leaves room for the totals stack above each bar
   var chartH = 250;
@@ -5143,7 +5159,7 @@ function renderLabMixChart() {
     // Totals (drawn ABOVE the bar)
     var totalPIs = (sc.data.typeBreakdown || []).reduce(function(a,t){ return a + (+t.pis || 0); }, 0);
     var totalNSF = rnd50(sc.data.piNASF || 0);
-    svg += '<text x="'+cx+'" y="'+(chartTop-14)+'" text-anchor="middle" font-size="24" font-weight="900" fill="#1B3A5C">'+totalPIs+' PIs</text>';
+    svg += '<text x="'+cx+'" y="'+(chartTop-12)+'" text-anchor="middle" font-size="'+lblFs.toFixed(1)+'" font-weight="900" fill="#1B3A5C">'+totalPIs+' PIs</text>';
     // Stacked bar
     var y = chartBottom;
     sc.data.typeBreakdown.forEach(function(t) {
@@ -5161,13 +5177,13 @@ function renderLabMixChart() {
       svg += '<rect x="'+(x-2)+'" y="'+(chartBottom-totalH-2)+'" width="'+(barW+4)+'" height="'+(totalH+4)+'" fill="none" stroke="#1B3A5C" stroke-width="2.5" rx="3"/>';
     }
     // v0.8.21: x-axis label = first 3 chars of the scenario name.
-    svg += '<text x="'+cx+'" y="'+(chartBottom+22)+'" text-anchor="middle" font-size="15" font-weight="'+(isActive?'900':'700')+'" fill="#1B3A5C">'+String(sc.name).substring(0,3)+'</text>';
+    svg += '<text x="'+cx+'" y="'+(chartBottom+18)+'" text-anchor="middle" font-size="'+lblFs.toFixed(1)+'" font-weight="'+(isActive?'900':'700')+'" fill="#1B3A5C">'+String(sc.name).substring(0,3)+'</text>';
   });
   // v0.8.21: x-axis baseline line.
   svg += '<line x1="'+(_lpad-6)+'" y1="'+chartBottom+'" x2="'+(w-_rpad+6)+'" y2="'+chartBottom+'" stroke="#1B3A5C" stroke-width="1.5"/>';
   svg += '</svg>';
-  svg += '<div class="legend" style="justify-content:center;margin-top:8px;font-size:.85rem">';
-  S.types.forEach(function(t){ svg += '<div class="legend-item"><div class="legend-dot" style="background:'+t.color+'"></div>'+t.label+'</div>'; });
+  svg += '<div style="display:flex;flex-wrap:wrap;gap:2px 10px;margin-top:6px;font-size:.66rem;color:#5A5F66;line-height:1.2">';
+  S.types.forEach(function(t){ svg += '<span style="display:inline-flex;align-items:center;gap:4px"><span style="width:8px;height:8px;border-radius:2px;background:'+t.color+'"></span>'+t.label+'</span>'; });
   svg += '</div>';
   return svg;
 }
@@ -5207,7 +5223,7 @@ function renderLabMixSFTable() {
   // so long names like "Baseline Scenario" don't truncate.
   var ACTIVE_BG = 'background:#FFF4C7;color:var(--navy);';
   var html = '<div style="overflow-x:auto"><table class="comp" style="font-size:.72rem;width:100%">';
-  html += '<thead><tr><th style="text-align:left;min-width:100px;vertical-align:bottom">Typology</th>';
+  html += '<thead><tr><th style="text-align:left;min-width:84px;vertical-align:bottom">Typology</th>';
   S.scenarios.forEach(function(sc, si){
     // Active column header: pale yellow band with navy text (overrides the
     // default navy-on-white thead styling for THIS cell only). Inactive
@@ -5215,7 +5231,7 @@ function renderLabMixSFTable() {
     var activeHead = si === S.activeScenario
       ? 'background:#FFF4C7;color:var(--navy);'
       : '';
-    html += '<th style="text-align:right;font-size:.7rem;font-weight:700;white-space:nowrap;line-height:1.15;min-width:38px;padding:5px 6px;vertical-align:bottom;'+activeHead+'" title="'+sc.name+'">'+sc.name.substring(0,3)+'</th>';
+    html += '<th style="text-align:center;font-size:.7rem;font-weight:700;white-space:nowrap;line-height:1.15;min-width:26px;width:26px;padding:4px 3px;vertical-align:bottom;'+activeHead+'" title="'+sc.name+'">'+sc.name.substring(0,3)+'</th>';
   });
   html += '</tr></thead><tbody>';
   rowIds.forEach(function(tid){
@@ -5225,7 +5241,7 @@ function renderLabMixSFTable() {
     S.scenarios.forEach(function(sc, si){
       var val = data[si][tid] || 0;
       var activeBg = si === S.activeScenario ? ACTIVE_BG : '';
-      html += '<td style="text-align:right;font-family:\'IBM Plex Mono\',monospace;font-weight:600;'+activeBg+'">'+(val>0?F(rnd50(val)):'<span style="color:var(--mut)">—</span>')+'</td>';
+      html += '<td style="text-align:center;padding:4px 3px;font-weight:500;'+activeBg+'">'+(val>0?F(rnd50(val)):'<span style="color:var(--mut)">—</span>')+'</td>';
     });
     html += '</tr>';
   });
@@ -5236,7 +5252,7 @@ function renderLabMixSFTable() {
     var tot = 0;
     rowIds.forEach(function(tid){ tot += data[si][tid] || 0; });
     var activeBg = si === S.activeScenario ? ACTIVE_BG : '';
-    html += '<td style="text-align:right;font-family:\'IBM Plex Mono\',monospace;font-weight:700;color:var(--navy);'+activeBg+'">'+F(rnd50(tot))+'</td>';
+    html += '<td style="text-align:center;padding:4px 3px;font-weight:700;color:var(--navy);'+activeBg+'">'+F(rnd50(tot))+'</td>';
   });
   html += '</tr>';
   html += '</tbody></table></div>';
