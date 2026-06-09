@@ -15,8 +15,8 @@ body{font-family:'Sora',sans-serif;font-weight:300;background:var(--bg);color:va
 .hd{text-align:center;margin-bottom:.8rem}
 .hd h1{font-size:2rem;font-weight:900;color:var(--navy);letter-spacing:-.5px}
 .hd-sub{font-size:.82rem;color:var(--mut);font-weight:400}
-.tabs{display:flex;gap:.4rem;margin-bottom:1rem;flex-wrap:wrap}
-.tab{padding:.6rem 1.4rem;border-radius:24px;border:2px solid var(--bdr);background:#fff;font-size:1rem;cursor:pointer;color:var(--mut);font-weight:600;font-family:inherit;transition:all .2s}
+.tabs{display:flex;gap:.3rem;margin-bottom:1rem;flex-wrap:wrap}
+.tab{padding:.4rem .7rem;border-radius:18px;border:1.5px solid var(--bdr);background:#fff;font-size:.8rem;cursor:pointer;color:var(--mut);font-weight:600;font-family:inherit;transition:all .2s;white-space:nowrap}
 .tab.on{background:var(--navy);color:#fff;border-color:var(--navy);transform:scale(1.02)}
 .tab:hover:not(.on){background:#eee;border-color:#ccc}
 .ms{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:.6rem;margin-bottom:1rem}
@@ -3771,7 +3771,7 @@ function _selScen() {
 function _buildScenarioTotalCostChart() {
   var scs = S.scenarios || []; if (!scs.length) return '';
   var sel = _selScen();
-  var HARD = '#5588B4', SOFT = '#8FB4D8';
+  var HARD = '#5588B4', SOFT = '#5588B4';  // single colour — darker blue
   var data = scs.map(function(sc){
     var cc = (sc.data && sc.data.cost) ? sc.data.cost : {};
     var hard = cc.hardCost || 0;
@@ -3791,9 +3791,7 @@ function _buildScenarioTotalCostChart() {
   var W = 560, padL = 50, padR = 14, padT = 42, padB = 34, chartH = 248;
   var innerW = W - padL - padR, slot = innerW / n, barW = Math.min(56, slot*0.62);
   var h = '<div class="card" style="margin:0;display:flex;flex-direction:column"><div class="card-title">Total Project Cost</div>';
-  h += '<div class="card-sub">Total project cost — <span style="color:'+HARD+';font-weight:700">hard</span> + <span style="color:'+SOFT+';font-weight:700">soft</span>. Click a bar to detail it below.</div>';
-  // v0.8.12: legend ABOVE the bars.
-  h += '<div style="display:flex;gap:16px;margin:2px 0 8px"><div style="display:flex;align-items:center;gap:5px"><span style="width:11px;height:11px;border-radius:2px;background:'+HARD+'"></span><span style="font-size:.78rem;color:var(--navy);font-weight:600">Hard Costs</span></div><div style="display:flex;align-items:center;gap:5px"><span style="width:11px;height:11px;border-radius:2px;background:'+SOFT+'"></span><span style="font-size:.78rem;color:var(--navy);font-weight:600">Soft Costs</span></div></div>';
+  h += '<div class="card-sub">Total project cost per scenario. Click a bar to detail it below.</div>';
   // v0.8.12: the svg fills the remaining card height and anchors to the BOTTOM
   // (preserveAspectRatio xMidYMax), so the chart baseline sits level with the
   // bottom rule of the Project Breakdown table in the adjacent card.
@@ -3926,7 +3924,7 @@ function _buildSelectedScenarioBreakdownTable(detailed) {
   function pc(v){ return Math.round(v/proj*100)+'%'; }
   function money(v){ return '$'+F(Math.round(v||0)); }
   var nm = sc.name.replace(/\s*—\s*/,' ');
-  var hardRows = [['Construction + Gen. Cond.', cc.constructionCost],['Design Contingency', cc.designContingency],['Construction Contingency', cc.constructionContingency],['Escalation', cc.escalationCost],['Tariff', cc.tariffCost||0]];
+  var hardRows = [['Construction Cost', (cc.constructionCost||0)+(cc.designContingency||0)],['Construction Contingency', cc.constructionContingency],['Escalation', cc.escalationCost],['Tariff', cc.tariffCost||0]];
   var softRows = [['Professional Services', soft('professionalServices')],['Owner Work', soft('ownerWork')],['Project Contingency', soft('projectContingency')],['Permits', soft('permits')],['Project Management Fee', soft('pmFee')]];
   // v0.8.10: Datawrapper-style heatmap on the Cost column — cell shading scales
   // with each line's share of the largest line item (hard cost, typically).
@@ -3960,8 +3958,8 @@ function _buildSelectedScenarioBreakdownTable(detailed) {
   }
   h += section('Hard Costs', pc(cc.hardCost), money(cc.hardCost), cc.hardCost);
   if (detailed) {
-    // Construction + Gen. Cond. with nested program fit-out + building-wide rows.
-    h += row('Construction + Gen. Cond.', cc.constructionCost);
+    // Construction Cost (incl. general conditions + design contingency), nested.
+    h += row('Construction Cost', (cc.constructionCost||0)+(cc.designContingency||0));
     var _fcats = _fitoutUserCategories(cc, (sc.state && sc.state.cost ? sc.state.cost.benchMap : null));
     var _fitTotal = 0; (cc.progLines||[]).forEach(function(p){ _fitTotal += p.cost||0; });
     h += drow('Program fit-out', _fitTotal, 34, { band:true });
@@ -3982,6 +3980,7 @@ function _buildSelectedScenarioBreakdownTable(detailed) {
   softRows.forEach(function(r){ h += row(r[0], r[1]); });
   h += '<tr style="border-top:2px solid #1B3A5C"><td style="padding:9px 12px;font-weight:900;color:var(--navy)">Total Project Cost</td><td style="'+num+';padding:9px 12px;font-weight:900;color:var(--navy)">100%</td><td style="'+num+';padding:9px 12px;font-weight:900;color:var(--navy)">'+money(proj)+'</td></tr>';
   h += '</tbody></table></div>';
+  h += '<div style="font-size:.7rem;color:var(--mut);margin-top:6px;font-style:italic">Construction Cost includes general conditions and design contingency.</div>';
   return h;
 }
 // Project cost with the cleanroom amenity removed (its fit-out, less markups,
@@ -3993,38 +3992,33 @@ function _projExCleanroom(cc) {
 }
 // v0.8.9: cost EFFICIENCY — $ of project cost (ex-cleanroom) per research NSF
 // (piNASF+coreNASF). Lower = better value. Best=green, worst=coral.
+// v0.8.27: replaces "Cost Efficiency" — vertical bar chart of the Fitout Rate
+// Menu ($/SF rates), one bar per menu entry, colored by FICM category.
 function _buildScenarioEfficiencyChart() {
-  var scs = S.scenarios || []; if (!scs.length) return '';
-  var sel = _selScen();
-  var data = scs.map(function(sc){
-    var cc = (sc.data && sc.data.cost) ? sc.data.cost : {}, dd = sc.data || {};
-    var resNSF = (dd.piNASF || 0) + (dd.coreNASF || 0);
-    return { name:sc.name, v: resNSF > 0 ? _projExCleanroom(cc) / resNSF : 0 };
-  });
-  var vals = data.map(function(d){ return d.v; });
-  var maxV = Math.max.apply(null, vals), minV = Math.min.apply(null, vals);
-  var yMin = Math.max(0, Math.floor(minV/250)*250 - 250), yMax = Math.ceil(maxV/250)*250;
-  if (yMax <= yMin) yMax = yMin + 1000;
-  var n = data.length, W = 560, padL = 56, padR = 14, padT = 40, padB = 108, chartH = 240;
-  var innerW = W - padL - padR, slot = innerW / n, barW = Math.min(56, slot*0.62);
-  var h = '<div class="card" style="margin:0"><div class="card-title">Cost Efficiency ($/Research NSF)</div>';
-  h += '<div class="card-sub">Project cost (<strong>excluding the cleanroom</strong>) per NSF of research (labs + shared facilities). <strong>Lower = better value</strong>: <span style="color:#639922;font-weight:700">best</span> spends least per researcher; <span style="color:#D85A30;font-weight:700">worst</span> spends most. Y-axis zoomed. Click a bar to load it.</div>';
-  h += '<div style="overflow-x:auto"><svg viewBox="0 0 '+W+' '+(chartH+padT+padB)+'" style="width:100%;font-family:\'Roboto\',\'IBM Plex Mono\',monospace">';
-  for (var g=0; g<=4; g++){ var yy=padT+chartH-chartH*g/4, vv=yMin+(yMax-yMin)*g/4;
+  var rates = (window.BENCH_RATES || []).slice();
+  if (!rates.length) return '';
+  var maxV = Math.max.apply(null, rates.map(function(b){ return +b.rate || 0; })); if (!(maxV>0)) maxV = 1;
+  var yMax = Math.ceil(maxV/250)*250; if (yMax <= 0) yMax = 250;
+  var n = rates.length, W = 560, padL = 44, padR = 14, padT = 34, padB = 122, chartH = 230;
+  var innerW = W - padL - padR, slot = innerW / n, barW = Math.min(38, slot*0.66);
+  var h = '<div class="card" style="margin:0"><div class="card-title">Fitout Rates ($/SF)</div>';
+  h += '<div class="card-sub">$/SF construction rate for each Fitout Rate Menu entry, colored by FICM category. Edit the values on the Fitout Rate Menu (Cost tab).</div>';
+  h += '<div style="overflow-x:auto"><svg viewBox="0 0 '+W+' '+(chartH+padT+padB)+'" style="width:100%;font-family:\'Roboto\',sans-serif">';
+  for (var g=0; g<=4; g++){ var yy=padT+chartH-chartH*g/4, vv=yMax*g/4;
     h += '<line x1="'+padL+'" y1="'+yy+'" x2="'+(W-padR)+'" y2="'+yy+'" stroke="var(--bdr)" stroke-dasharray="3,3"/>';
     h += '<text x="'+(padL-7)+'" y="'+(yy+3)+'" text-anchor="end" font-size="9" fill="var(--mut)">$'+F(Math.round(vv))+'</text>'; }
-  data.forEach(function(d,i){
-    var x = padL + slot*i + slot/2;
-    var bh = (yMax>yMin) ? (d.v-yMin)/(yMax-yMin)*chartH : 0; if(bh<1)bh=1;
+  rates.forEach(function(b,i){
+    var x = padL + slot*i + slot/2, val = +b.rate || 0;
+    var bh = val/yMax*chartH; if (bh<1) bh=1;
     var y = padT+chartH-bh, x0 = x-barW/2;
-    var col = (d.v===minV) ? '#639922' : (d.v===maxV) ? '#D85A30' : '#378ADD';
-    var on = (i===sel);
-    h += '<g style="cursor:pointer" onclick="loadScenario('+i+')">';
-    h += '<rect x="'+x0.toFixed(1)+'" y="'+y.toFixed(1)+'" width="'+barW.toFixed(1)+'" height="'+bh.toFixed(1)+'" rx="3" fill="'+col+'"'+(on?' stroke="var(--navy)" stroke-width="2.5"':'')+'/>';
-    h += '<text x="'+x+'" y="'+(y-7)+'" text-anchor="middle" font-size="12.5" font-weight="800" fill="var(--navy)" style="font-family:\'Roboto\',sans-serif">$'+F(Math.round(d.v))+'</text>';
-    h += _angledWrapLabel(d.name, x, padT+chartH+15);
-    h += '</g>';
+    var col = _rateCatColor(b.cat || 'research');
+    h += '<rect x="'+x0.toFixed(1)+'" y="'+y.toFixed(1)+'" width="'+barW.toFixed(1)+'" height="'+bh.toFixed(1)+'" rx="2" fill="'+col+'"/>';
+    var lbl = '$'+F(Math.round(val));
+    var fs = Math.min(11, Math.max(7, barW*1.7/lbl.length));
+    h += '<text x="'+x+'" y="'+(y-5)+'" text-anchor="middle" font-size="'+fs.toFixed(1)+'" font-weight="800" fill="var(--navy)">'+lbl+'</text>';
+    h += _angledWrapLabel(String(b.label||''), x, padT+chartH+13);
   });
+  h += '<line x1="'+padL+'" y1="'+(padT+chartH)+'" x2="'+(W-padR)+'" y2="'+(padT+chartH)+'" stroke="#1B3A5C" stroke-width="1.5"/>';
   h += '</svg></div></div>';
   return h;
 }
@@ -4071,6 +4065,59 @@ function _buildScenarioCategoryComparisonChart() {
   h += '</div></div>';
   return h;
 }
+// v0.8.28: vertical stacked bar of the selected scenario's project breakdown
+// percentages (hard-cost components in blues, soft-cost components in greens).
+function _buildProjectBreakdownStackChart() {
+  var scs = S.scenarios || []; if (!scs.length) return '';
+  var sc = scs[_selScen()]; if (!sc || !sc.data) return '';
+  var cc = sc.data.cost || {}; var proj = cc.projectCost || 1;
+  function soft(k){ var x=(cc.softLines||[]).filter(function(s){return s.key===k})[0]; return x?x.amount:0; }
+  // v0.8.30: two subtle colors (hard vs soft); each line a segment sized by its
+  // share of total project cost, divided by thin white rules. Design Contingency
+  // omitted. Big hard/soft total % labels to the right; legend lists every line's
+  // % (covering segments too small to label in the bar); bottom baseline.
+  var HARD='#9FBCD9', SOFT='#9AD3BE';                 // soft fills
+  var HARD_T='#3F6B96', SOFT_T='#2E7E61';             // readable text/label tints
+  var allSegs = [
+    { l:'Construction Cost', v:(cc.constructionCost||0)+(cc.designContingency||0), c:HARD },
+    { l:'Construction Contingency', v:cc.constructionContingency||0, c:HARD },
+    { l:'Escalation', v:cc.escalationCost||0, c:HARD },
+    { l:'Tariff', v:cc.tariffCost||0, c:HARD },
+    { l:'Professional Services', v:soft('professionalServices'), c:SOFT },
+    { l:'Owner Work', v:soft('ownerWork'), c:SOFT },
+    { l:'Project Contingency', v:soft('projectContingency'), c:SOFT },
+    { l:'Permits', v:soft('permits'), c:SOFT },
+    { l:'Project Management Fee', v:soft('pmFee'), c:SOFT }
+  ];
+  var hardFrac = (cc.hardCost||0)/proj, softFrac = (cc.softCostTotal||0)/proj;
+  var nm = sc.name.replace(/\s*—\s*/,' ');
+  var W=320, padT=14, chartH=300, barW=88, x0=18, xLab=x0+barW+26, baseY=padT+chartH;
+  var h = '<div class="card" style="margin:0"><div class="card-title">Project Breakdown</div>';
+  h += '<div class="card-sub">Each line’s share of total project cost for '+nm+' — <span style="color:'+HARD_T+';font-weight:700">hard</span> vs <span style="color:'+SOFT_T+';font-weight:700">soft</span> costs.</div>';
+  h += '<div style="overflow-x:auto"><svg viewBox="0 0 '+W+' '+(chartH+padT*2)+'" style="width:100%;max-width:'+W+'px;font-family:\'Roboto\',sans-serif">';
+  var y = padT;
+  allSegs.forEach(function(s){
+    var pct = s.v/proj; var sh = pct*chartH; if (sh<=0) return;
+    h += '<rect x="'+x0+'" y="'+y.toFixed(1)+'" width="'+barW+'" height="'+sh.toFixed(1)+'" fill="'+s.c+'" stroke="#fff" stroke-width="1"><title>'+s.l+': '+Math.round(pct*100)+'%</title></rect>';
+    if (sh>15) h += '<text x="'+(x0+barW/2)+'" y="'+(y+sh/2+4).toFixed(1)+'" text-anchor="middle" font-size="11" font-weight="700" fill="#fff">'+Math.round(pct*100)+'%</text>';
+    y += sh;
+  });
+  var hardCY = padT + hardFrac*chartH/2, softCY = padT + hardFrac*chartH + softFrac*chartH/2;
+  h += '<text x="'+xLab+'" y="'+(hardCY+4).toFixed(1)+'" font-size="34" font-weight="900" fill="'+HARD_T+'" style="font-family:\'Roboto\',sans-serif">'+Math.round(hardFrac*100)+'%</text>';
+  h += '<text x="'+xLab+'" y="'+(hardCY+22).toFixed(1)+'" font-size="11" font-weight="700" fill="'+HARD_T+'">Hard Costs</text>';
+  h += '<text x="'+xLab+'" y="'+(softCY+4).toFixed(1)+'" font-size="34" font-weight="900" fill="'+SOFT_T+'" style="font-family:\'Roboto\',sans-serif">'+Math.round(softFrac*100)+'%</text>';
+  h += '<text x="'+xLab+'" y="'+(softCY+22).toFixed(1)+'" font-size="11" font-weight="700" fill="'+SOFT_T+'">Soft Costs</text>';
+  // bottom baseline
+  h += '<line x1="'+x0+'" y1="'+(baseY+0.5)+'" x2="'+(W-10)+'" y2="'+(baseY+0.5)+'" stroke="#1B3A5C" stroke-width="2"/>';
+  h += '</svg></div>';
+  // legend — every line + its % (so small/unreadable segments are still called out)
+  h += '<div style="display:flex;flex-wrap:wrap;gap:3px 12px;margin-top:8px;font-size:.66rem;color:#5A5F66;line-height:1.3">';
+  allSegs.forEach(function(s){ if (s.v>0){ var p=Math.round(s.v/proj*100); h += '<span style="display:inline-flex;align-items:center;gap:4px"><span style="width:8px;height:8px;border-radius:2px;background:'+s.c+'"></span>'+s.l+' <strong style="color:var(--navy);font-weight:700">'+p+'%</strong></span>'; } });
+  h += '</div>';
+  h += '<div style="font-size:.7rem;color:var(--mut);margin-top:6px;font-style:italic">Construction Cost includes general conditions and design contingency.</div>';
+  h += '</div>';
+  return h;
+}
 function _buildScenarioTopCharts() {
   if (!S.scenarios || !S.scenarios.length) return '';
   _recomputeScenarioData();
@@ -4079,9 +4126,10 @@ function _buildScenarioTopCharts() {
   h += _buildSelectedScenarioBreakdownTable();
   h += '</div>';
   h += _buildSelectedScenarioConstructionBar();
-  h += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:18px;align-items:start;margin-bottom:18px">';
+  h += '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:18px;align-items:stretch;margin-bottom:18px">';
   h += _buildScenarioEfficiencyChart();
   h += _buildScenarioCategoryComparisonChart();
+  h += _buildProjectBreakdownStackChart();
   h += '</div>';
   return h;
 }
@@ -7769,9 +7817,8 @@ function _migrateMenuKeys(){
 // ============================================================
 // TABS — v0.5 13-tab order
 // ============================================================
-TABS = ['Fundamentals','PI Typologies','PI Space Mix','Academic Space','Floor Stacking',
-        'Energy','Cost','Technical Criteria',
-        'Scenarios','N\'hood','Viz'];
+TABS = ['Fundamentals','PI Typologies','PI Space Mix','Academic Space','Stacking',
+        'Scenarios','Cost','Energy','Technical','N\'hood'];
 
 // Initialize state branches for new tabs.
 // v0.5.1 fix: drop the separate S.academicItems and use S.gfProgram directly
@@ -8995,17 +9042,12 @@ render = function() {
     'PI Typologies':      function() { el.innerHTML = renderTypologies(d); },
     'PI Space Mix':       function() { el.innerHTML = renderMix(d); },
     'Academic Space':     function() { el.innerHTML = renderAcademicSpaceV5(d); _apsApplyCols(); _skillInitDnD(); },
-    'Floor Stacking':     function() { el.innerHTML = renderFloorStackingV5(d); _skillMoveVisual2(); _skillMountStackVisuals(d); _skillMountProgramFill(d); _skillStripDGSF(); },
+    'Stacking':           function() { el.innerHTML = renderFloorStackingV5(d); _skillMoveVisual2(); _skillMountStackVisuals(d); _skillMountProgramFill(d); _skillStripDGSF(); },
     'Energy':             function() { el.innerHTML = renderEnergy(d); },
     'Cost':               function() { el.innerHTML = renderCostV5(d); },
-    'Technical Criteria': function() { el.innerHTML = renderMEP(d); },
+    'Technical':          function() { el.innerHTML = renderMEP(d); },
     'Scenarios':          function() { el.innerHTML = renderScenarios(d); },
-    "N'hood":             function() { el.innerHTML = (typeof renderLabModule==='function') ? renderLabModule() : '<div class="card">Neighborhood module</div>'; },
-    'Viz':                function() {
-                            el.innerHTML = renderVisualizations(d);
-                            // Force a fresh mount; defer to next tick so DOM exists
-                            setTimeout(function(){ try { mountD3Visuals(d); } catch(e){ console.warn('viz mount:', e); } }, 50);
-                          }
+    "N'hood":             function() { el.innerHTML = (typeof renderLabModule==='function') ? renderLabModule() : '<div class="card">Neighborhood module</div>'; }
   };
   if (dispatch[label]) dispatch[label]();
   if (typeof _enhanceCaptions === 'function') _enhanceCaptions();
