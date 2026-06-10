@@ -98,6 +98,8 @@ table.comp tr:hover{background:#f8f8f5}
 .cost-roboto table.comp th,.scen-pb table.comp th{background:transparent!important;color:var(--mut)!important;letter-spacing:.04em;font-size:.7rem!important;font-weight:700!important;border:0!important;border-bottom:2px solid #1B3A5C!important;padding:8px 12px!important}
 .cost-roboto table.comp td,.scen-pb table.comp td{font-family:'Roboto',sans-serif!important;font-variant-numeric:tabular-nums;border-bottom:1px solid var(--bdr)!important;font-weight:400}
 .cost-roboto table.comp tr:hover,.scen-pb table.comp tr:hover{background:#f8f8f5}
+/* v0.8.28: PI Space Mix cards — header text enlarged to match the footer font. */
+.scen-pb table.pi-mix-tbl th{font-size:.92rem!important}
 /* v0.8.20: compact Cost Detail table — smaller font, tight padding, small dropdowns. */
 .cost-detail-compact table.comp th,.cost-detail-compact table.comp td{padding:2px 6px!important;font-size:.7rem!important}
 .cost-detail-compact table.comp th{min-width:0!important;line-height:1.1}
@@ -1563,12 +1565,15 @@ function renderMix(d) {
       return 0;
     });
   })();
-  // attach "% of total NASF" for the bar-chart data labels.
-  mergedBreakdown.forEach(function(t){ t.pctTotal = d.piNASF > 0 ? Math.round(t.totalNASF / d.piNASF * 100) : 0; });
+  // attach "% of total NASF" + abbreviated label for the bar-chart data labels.
+  mergedBreakdown.forEach(function(t){
+    t.pctTotal = d.piNASF > 0 ? Math.round(t.totalNASF / d.piNASF * 100) : 0;
+    t.abbr = _abbrevBarLabel(t.label);
+  });
   h += '<div class="card"><div class="card-title">Lab Space by Typology</div>';
   h += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:18px;align-items:center">';
-  h += '<div>'+renderBarChart(mergedBreakdown.filter(function(t){return t.totalNASF>0}), 'totalNASF', 'label', 'color')+'</div>';
-  h += '<div><table class="comp" style="font-family:\'Roboto\',sans-serif"><tr><th>Lab Type</th><th>PIs</th><th>Lab</th><th>Write-Up</th><th>Office</th><th>Total NASF</th><th>% of Labs</th></tr>';
+  h += '<div>'+renderBarChart(mergedBreakdown.filter(function(t){return t.totalNASF>0}), 'totalNASF', 'abbr', 'color')+'</div>';
+  h += '<div class="scen-pb"><table class="comp pi-mix-tbl"><tr><th>Lab Type</th><th>PIs</th><th>Lab</th><th>Write-Up</th><th>Office</th><th>Total NASF</th><th>% of Labs</th></tr>';
   var _sumLab=0, _sumWU=0, _sumOff=0;
   mergedBreakdown.forEach(function(t){
     if (t.totalNASF === 0 && t.id !== 'comp') return;
@@ -1582,9 +1587,9 @@ function renderMix(d) {
        + '<td style="color:'+(typeof FICM!=="undefined"?FICM.office:"#6E7E90")+'">'+F(off)+'</td>'
        + '<td style="font-weight:700">'+F(t.totalNASF)+'</td><td>'+pct+'%</td></tr>';
   });
-  h += '<tr style="background:var(--navy)"><td style="color:#fff;font-weight:700" colspan="2">TOTAL RESEARCH &amp; OFFICE</td>'
-     + '<td style="color:#fff;font-weight:700">'+F(_sumLab)+'</td><td style="color:#fff;font-weight:700">'+F(_sumWU)+'</td><td style="color:#fff;font-weight:700">'+F(_sumOff)+'</td>'
-     + '<td style="color:#fff;font-weight:700">'+F(d.piNASF)+'</td><td style="color:#fff;font-weight:700">100%</td></tr>';
+  h += '<tr style="border-top:2px solid #1B3A5C"><td style="color:var(--navy);font-weight:900" colspan="2">Total Lab &amp; Office</td>'
+     + '<td style="color:var(--navy);font-weight:900">'+F(_sumLab)+'</td><td style="color:var(--navy);font-weight:900">'+F(_sumWU)+'</td><td style="color:var(--navy);font-weight:900">'+F(_sumOff)+'</td>'
+     + '<td style="color:var(--navy);font-weight:900">'+F(d.piNASF)+'</td><td style="color:var(--navy);font-weight:900">100%</td></tr>';
   h += '</table></div>';
   h += '</div></div>';
 
@@ -1613,14 +1618,15 @@ function renderMix(d) {
         pis += n; nasf += n*(_gn[t.id]||0);
         lab += n*(_lab[t.id]||0); wu += n*(_wu[t.id]||0); off += n*(_off[t.id]||0);
       });
-      return { id:'cat'+ci, label:cat.name||('Theme '+(ci+1)), color:_palette[ci%_palette.length],
+      var _nm = cat.name||('Theme '+(ci+1));
+      return { id:'cat'+ci, label:_nm, abbr:_abbrevBarLabel(_nm), color:_palette[ci%_palette.length],
         pis:pis, totalNASF:nasf, labNASF:lab, writeupNASF:wu, officeNASF:off,
         pctTotal: _themeTotal>0?Math.round(nasf/_themeTotal*100):0 };
     });
     h += '<div class="card"><div class="card-title">Thematic Research Space Mix</div>';
     h += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:18px;align-items:center">';
-    h += '<div>'+renderBarChart(_rows.filter(function(t){return t.totalNASF>0}), 'totalNASF', 'label', 'color')+'</div>';
-    h += '<div><table class="comp" style="font-family:\'Roboto\',sans-serif"><tr><th>Theme</th><th>PIs</th><th>Lab</th><th>Write-Up</th><th>Office</th><th>Total NASF</th><th>% of Total</th></tr>';
+    h += '<div>'+renderBarChart(_rows.filter(function(t){return t.totalNASF>0}), 'totalNASF', 'abbr', 'color')+'</div>';
+    h += '<div class="scen-pb"><table class="comp pi-mix-tbl"><tr><th>Theme</th><th>PIs</th><th>Lab</th><th>Write-Up</th><th>Office</th><th>Total NASF</th><th>% of Total</th></tr>';
     var _sL=0,_sW=0,_sO=0,_sP=0;
     _rows.forEach(function(t){
       var pct = _themeTotal>0?Math.round(t.totalNASF/_themeTotal*100):0;
@@ -1631,10 +1637,10 @@ function renderMix(d) {
          + '<td style="color:'+(typeof FICM!=="undefined"?FICM.office:"#6E7E90")+'">'+F(t.officeNASF)+'</td>'
          + '<td style="font-weight:700">'+F(t.totalNASF)+'</td><td>'+pct+'%</td></tr>';
     });
-    h += '<tr style="background:var(--navy)"><td style="color:#fff;font-weight:700">TOTAL RESEARCH &amp; OFFICE</td>'
-       + '<td style="color:#fff;font-weight:700">'+_sP+'</td>'
-       + '<td style="color:#fff;font-weight:700">'+F(_sL)+'</td><td style="color:#fff;font-weight:700">'+F(_sW)+'</td><td style="color:#fff;font-weight:700">'+F(_sO)+'</td>'
-       + '<td style="color:#fff;font-weight:700">'+F(d.piNASF)+'</td><td style="color:#fff;font-weight:700">100%</td></tr>';
+    h += '<tr style="border-top:2px solid #1B3A5C"><td style="color:var(--navy);font-weight:900">Total Lab &amp; Office</td>'
+       + '<td style="color:var(--navy);font-weight:900">'+_sP+'</td>'
+       + '<td style="color:var(--navy);font-weight:900">'+F(_sL)+'</td><td style="color:var(--navy);font-weight:900">'+F(_sW)+'</td><td style="color:var(--navy);font-weight:900">'+F(_sO)+'</td>'
+       + '<td style="color:var(--navy);font-weight:900">'+F(d.piNASF)+'</td><td style="color:var(--navy);font-weight:900">100%</td></tr>';
     h += '</table></div>';
     h += '</div></div>';
   })();
@@ -5214,6 +5220,21 @@ function renderDonut(segments, totalVal, centerLabel, centerSub, size) {
 // ============================================================
 // SVG CHART HELPERS
 // ============================================================
+// v0.8.29: short labels for the PI Space Mix bar charts so the bars share a
+// fixed left edge. Known typology + default theme names map to clean
+// abbreviations; anything else (e.g. renamed themes) is truncated.
+function _abbrevBarLabel(s) {
+  if (!s) return '';
+  var map = {
+    'Wet Labs (BioE)':'Wet Bio', 'Wet Chem / Materials':'Wet Chem', 'Dry Lab Workshop':'Dry Lab',
+    'Computational':'Comp', 'Optics Lower Intensity':'Optics Low', 'Optics Nano Higher Intensity':'Optics High',
+    'Large Lab':'Large Lab',
+    'Remote Environments':'Remote Env', 'Optimize Human Health Span':'Health Span',
+    'Climate Resilient Communities':'Climate', 'Embodied AI':'Embodied AI'
+  };
+  if (map[s]) return map[s];
+  return s.length > 13 ? s.slice(0,12).trim()+'…' : s;
+}
 function renderBarChart(data, valKey, labelKey, colorKey) {
   if (data.length === 0) return '<div style="color:var(--mut);text-align:center;padding:20px">No data</div>';
   var maxVal = Math.max.apply(null, data.map(function(d){return d[valKey]}));
@@ -5223,7 +5244,7 @@ function renderBarChart(data, valKey, labelKey, colorKey) {
     // v0.8.24: optional "% of total" data label — pass d.pctTotal (already rounded).
     var pctLbl = (d.pctTotal != null) ? ' <span style="font-weight:600;opacity:.8">('+d.pctTotal+'%)</span>' : '';
     h += '<div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">';
-    h += '<div style="min-width:180px;font-size:.88rem;font-weight:600;color:var(--navy);text-align:right">'+d[labelKey]+'</div>';
+    h += '<div style="flex:0 0 96px;width:96px;font-size:.82rem;font-weight:600;color:var(--navy);text-align:right;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+d[labelKey]+'</div>';
     h += '<div style="flex:1;height:32px;background:#f0f0f0;border-radius:6px;overflow:hidden">';
     h += '<div style="width:'+pct.toFixed(1)+'%;height:100%;background:'+d[colorKey]+';border-radius:6px;display:flex;align-items:center;padding:0 10px">';
     if (pct > 15) h += '<span style="font-size:.8rem;font-weight:700;color:#fff">'+F(d[valKey])+pctLbl+'</span>';
