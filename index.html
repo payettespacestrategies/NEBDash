@@ -1559,11 +1559,8 @@ function renderMix(d) {
         color:_cs?_cs.color:'#ACE08C', pis:0, groupNASF:0, totalNASF:0, largePIs:0,
         labNASF:0, writeupNASF:0, officeNASF:0 });
     }
-    mergedBreakdown.sort(function(a,b){
-      if (a.id==='drywkshp') return -1;
-      if (b.id==='drywkshp') return 1;
-      return 0;
-    });
+    var _rank = function(id){ return id==='comp' ? 0 : id==='drywkshp' ? 1 : 2; };
+    mergedBreakdown.sort(function(a,b){ return _rank(a.id) - _rank(b.id); });
   })();
   // attach "% of total NASF" + abbreviated label for the bar-chart data labels.
   mergedBreakdown.forEach(function(t){
