@@ -4006,6 +4006,14 @@ function _projExCleanroom(cc) {
 function _buildScenarioEfficiencyChart() {
   var rates = (window.BENCH_RATES || []).slice();
   if (!rates.length) return '';
+  // v0.8.33: sort by FICM category (dashboard order), then by rate high→low.
+  var _catOrder = (typeof _FITCAT_ORDER !== 'undefined') ? _FITCAT_ORDER : [];
+  function _catRank(c){ var i=_catOrder.indexOf(c||''); return i<0?99:i; }
+  rates.sort(function(a,b){
+    var ca=_catRank(a.cat), cb=_catRank(b.cat);
+    if (ca!==cb) return ca-cb;
+    return (+b.rate||0)-(+a.rate||0);
+  });
   var maxV = Math.max.apply(null, rates.map(function(b){ return +b.rate || 0; })); if (!(maxV>0)) maxV = 1;
   var yMax = Math.ceil(maxV/250)*250; if (yMax <= 0) yMax = 250;
   var n = rates.length, W = 560, padL = 44, padR = 14, padT = 34, padB = 122, chartH = 230;
