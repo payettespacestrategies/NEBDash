@@ -3853,17 +3853,18 @@ function _buildScenarioTotalCostChart() {
     var soft = (cc.softCostTotal != null) ? cc.softCostTotal : Math.max(0, (cc.projectCost||0) - hard);
     return { name:sc.name, cost:cc.projectCost||0, hard:hard, soft:soft };
   });
-  // v0.8.26: zoomed y-axis for greater differentiation between scenarios —
-  // baseline just below the smallest hard cost, top rounded up, $25M increments.
+  // v0.8.32: zero baseline (bars start from $0). Top rounded up to the next
+  // $25M so the tallest bar fills the chart height — this keeps the absolute
+  // pixel spread between scenarios as wide as a zero-based axis allows.
   var Q25 = 25000000;
   var _minTot = Math.min.apply(null, data.map(function(d){return d.cost}));
   var _maxTot = Math.max.apply(null, data.map(function(d){return d.cost}));
-  // v0.8.31: baseline one $25M increment below the smallest total so the gap
-  // between shortest and tallest bar is exaggerated; top one increment above max.
-  var yMin = Math.max(0, Math.floor(_minTot/Q25)*Q25 - Q25);
+  var yMin = 0;
   var yMax = Math.ceil(_maxTot/Q25)*Q25;
-  if (yMax <= yMin) yMax = yMin + Q25;
+  if (yMax <= yMin) yMax = Q25;
   var yRange = yMax - yMin;
+  // Adaptive gridline step so a tall (0→max) axis stays readable (~5-6 lines).
+  var gridStep = Q25 * Math.max(1, Math.ceil(yRange / Q25 / 6));
   var n = data.length;
   var W = 560, padL = 50, padR = 14, padT = 42, padB = 34, chartH = 360;
   var innerW = W - padL - padR, slot = innerW / n, barW = Math.min(56, slot*0.62);
@@ -3873,7 +3874,7 @@ function _buildScenarioTotalCostChart() {
   // (preserveAspectRatio xMidYMax), so the chart baseline sits level with the
   // bottom rule of the Project Breakdown table in the adjacent card.
   h += '<div style="flex:1;min-height:'+(chartH+padT+padB)+'px"><svg viewBox="0 0 '+W+' '+(chartH+padT+padB)+'" preserveAspectRatio="xMidYMax meet" style="width:100%;height:100%;font-family:\'Roboto\',\'IBM Plex Mono\',monospace">';
-  for (var vv=yMin; vv<=yMax+1; vv+=Q25){ var yy=padT+chartH-(vv-yMin)/yRange*chartH;
+  for (var vv=yMin; vv<=yMax+1; vv+=gridStep){ var yy=padT+chartH-(vv-yMin)/yRange*chartH;
     h += '<line x1="'+padL+'" y1="'+yy.toFixed(1)+'" x2="'+(W-padR)+'" y2="'+yy.toFixed(1)+'" stroke="var(--bdr)" stroke-dasharray="3,3"/>';
     h += '<text x="'+(padL-7)+'" y="'+(yy+3).toFixed(1)+'" text-anchor="end" font-size="10" fill="var(--navy)">'+FMM(vv)+'</text>'; }
   data.forEach(function(d,i){
