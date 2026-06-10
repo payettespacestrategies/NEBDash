@@ -388,6 +388,14 @@ function getPIFloorAllocation() {
   S.types.forEach(function(t) {
     var basementPIs = (S.basementAllocation && S.basementAllocation[t.id]) || 0;
     var upperPIs = Math.max(0, (t.pis || 0) - basementPIs);
+    // v0.8.32: a typology with no upper-floor PIs contributes 0 to every floor.
+    // Otherwise a stale explicit entry in S.piFloorAllocation (left over from a
+    // prior scenario / removed PIs) is kept verbatim and silently inflates the
+    // Floor Total + grand Assigned even though the row is hidden (0 PIs).
+    if (upperPIs <= 0) {
+      for (var fz = 2; fz <= S.aboveGradeFloors; fz++) alloc[String(fz)][t.id] = 0;
+      return;
+    }
     // Sum any explicit assignment for this typology
     var explicitTotal = 0, explicitFloors = {};
     for (var f = 2; f <= S.aboveGradeFloors; f++) {
