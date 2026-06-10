@@ -1547,13 +1547,31 @@ function renderMix(d) {
   // v0.5.40: NASF Breakdown by Lab Type — bar chart + table side-by-side
   // (was stacked) — moves above the PI Distribution cards.
   var mergedBreakdown = mergeLargeLabBreakdown(d.typeBreakdown);
-  h += '<div class="card"><div class="card-title">NASF Breakdown by Lab Type</div>';
+  // v0.8.24: ensure Computational always appears (even at 0 PIs / 0 NASF), then
+  // force Dry Lab Workshop to the top of the list. Order applies to both the
+  // bar chart and the table.
+  (function(){
+    if (!mergedBreakdown.some(function(t){return t.id==='comp';})) {
+      var _cs = S.types.find(function(x){return x.id==='comp';});
+      mergedBreakdown.push({ id:'comp', label:_cs?_cs.label:'Computational',
+        color:_cs?_cs.color:'#ACE08C', pis:0, groupNASF:0, totalNASF:0, largePIs:0,
+        labNASF:0, writeupNASF:0, officeNASF:0 });
+    }
+    mergedBreakdown.sort(function(a,b){
+      if (a.id==='drywkshp') return -1;
+      if (b.id==='drywkshp') return 1;
+      return 0;
+    });
+  })();
+  // attach "% of total NASF" for the bar-chart data labels.
+  mergedBreakdown.forEach(function(t){ t.pctTotal = d.piNASF > 0 ? Math.round(t.totalNASF / d.piNASF * 100) : 0; });
+  h += '<div class="card"><div class="card-title">Lab Space by Typology</div>';
   h += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:18px;align-items:start">';
   h += '<div>'+renderBarChart(mergedBreakdown.filter(function(t){return t.totalNASF>0}), 'totalNASF', 'label', 'color')+'</div>';
   h += '<div><table class="comp"><tr><th>Lab Type</th><th>PIs</th><th>Lab</th><th>Write-Up</th><th>Office</th><th>Total NASF</th><th>% of Labs</th></tr>';
   var _sumLab=0, _sumWU=0, _sumOff=0;
   mergedBreakdown.forEach(function(t){
-    if (t.totalNASF === 0) return;
+    if (t.totalNASF === 0 && t.id !== 'comp') return;
     var pct = d.piNASF > 0 ? Math.round(t.totalNASF / d.piNASF * 100) : 0;
     var piLabel = t.largePIs ? t.pis + ' <span style="font-weight:400;color:var(--mut)">(+' + t.largePIs + ' lg)</span>' : ''+t.pis;
     var lab=t.labNASF||0, wu=t.writeupNASF||0, off=t.officeNASF||0;
@@ -1575,6 +1593,52 @@ function renderMix(d) {
   // Optimize Human Health, Climate Resilient Communities, Embodied AI) can be
   // renamed, added to, or removed. PI counts roll up into S.types[].pis.
   _ensurePiCategories();
+
+  // v0.8.24: Thematic Research Space Mix — a clone of "Lab Space by Typology"
+  // whose rows are the thematic categories (S.piCategories) instead of typologies.
+  (function(){
+    var _gn = {}, _lab = {}, _wu = {}, _off = {};
+    (d.typeBreakdown||[]).forEach(function(tb){
+      _gn[tb.id]  = tb.groupNASF || 0;
+      _lab[tb.id] = (tb.groupOpenLab||0) + (tb.groupLabSupport||0);
+      _wu[tb.id]  = tb.groupDesk || 0;
+      _off[tb.id] = tb.groupOffice || 0;
+    });
+    var _palette = ['#1B6CA8','#2E9E8F','#C06C3E','#7E63B0','#B0843E','#4A8FBF','#9A5BA0','#D08A4E'];
+    var _themeTotal = d.piNASF || 0;
+    var _rows = S.piCategories.map(function(cat, ci){
+      var pis=0, nasf=0, lab=0, wu=0, off=0;
+      S.types.forEach(function(t){
+        var n = +(cat.mix[t.id]||0);
+        pis += n; nasf += n*(_gn[t.id]||0);
+        lab += n*(_lab[t.id]||0); wu += n*(_wu[t.id]||0); off += n*(_off[t.id]||0);
+      });
+      return { id:'cat'+ci, label:cat.name||('Theme '+(ci+1)), color:_palette[ci%_palette.length],
+        pis:pis, totalNASF:nasf, labNASF:lab, writeupNASF:wu, officeNASF:off,
+        pctTotal: _themeTotal>0?Math.round(nasf/_themeTotal*100):0 };
+    });
+    h += '<div class="card"><div class="card-title">Thematic Research Space Mix</div>';
+    h += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:18px;align-items:start">';
+    h += '<div>'+renderBarChart(_rows.filter(function(t){return t.totalNASF>0}), 'totalNASF', 'label', 'color')+'</div>';
+    h += '<div><table class="comp"><tr><th>Theme</th><th>PIs</th><th>Lab</th><th>Write-Up</th><th>Office</th><th>Total NASF</th><th>% of Total</th></tr>';
+    var _sL=0,_sW=0,_sO=0,_sP=0;
+    _rows.forEach(function(t){
+      var pct = _themeTotal>0?Math.round(t.totalNASF/_themeTotal*100):0;
+      _sL+=t.labNASF; _sW+=t.writeupNASF; _sO+=t.officeNASF; _sP+=t.pis;
+      h += '<tr><td style="font-weight:700;color:'+t.color+'">'+t.label+'</td><td>'+t.pis+'</td>'
+         + '<td style="color:var(--clrResearch)">'+F(t.labNASF)+'</td>'
+         + '<td style="color:'+(typeof FICM!=="undefined"?FICM.officeA:"#8893a8")+'">'+F(t.writeupNASF)+'</td>'
+         + '<td style="color:'+(typeof FICM!=="undefined"?FICM.office:"#6E7E90")+'">'+F(t.officeNASF)+'</td>'
+         + '<td style="font-weight:700">'+F(t.totalNASF)+'</td><td>'+pct+'%</td></tr>';
+    });
+    h += '<tr style="background:var(--navy)"><td style="color:#fff;font-weight:700">TOTAL RESEARCH &amp; OFFICE</td>'
+       + '<td style="color:#fff;font-weight:700">'+_sP+'</td>'
+       + '<td style="color:#fff;font-weight:700">'+F(_sL)+'</td><td style="color:#fff;font-weight:700">'+F(_sW)+'</td><td style="color:#fff;font-weight:700">'+F(_sO)+'</td>'
+       + '<td style="color:#fff;font-weight:700">'+F(d.piNASF)+'</td><td style="color:#fff;font-weight:700">100%</td></tr>';
+    h += '</table></div>';
+    h += '</div></div>';
+  })();
+
   h += '<div class="card"><div class="card-title" style="display:flex;align-items:center;gap:10px">PI Distribution by Thematic Category';
   h += '<button class="btn btn-sm btn-navy" style="margin-left:auto" onclick="addPiCategory()">+ Add Category</button>';
   h += '</div>';
@@ -5156,13 +5220,15 @@ function renderBarChart(data, valKey, labelKey, colorKey) {
   var h = '<div style="padding:8px 0">';
   data.forEach(function(d) {
     var pct = maxVal > 0 ? (d[valKey] / maxVal * 100) : 0;
+    // v0.8.24: optional "% of total" data label — pass d.pctTotal (already rounded).
+    var pctLbl = (d.pctTotal != null) ? ' <span style="font-weight:600;opacity:.8">('+d.pctTotal+'%)</span>' : '';
     h += '<div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">';
     h += '<div style="min-width:180px;font-size:.88rem;font-weight:600;color:var(--navy);text-align:right">'+d[labelKey]+'</div>';
     h += '<div style="flex:1;height:32px;background:#f0f0f0;border-radius:6px;overflow:hidden">';
     h += '<div style="width:'+pct.toFixed(1)+'%;height:100%;background:'+d[colorKey]+';border-radius:6px;display:flex;align-items:center;padding:0 10px">';
-    if (pct > 15) h += '<span style="font-size:.8rem;font-weight:700;color:#fff">'+F(d[valKey])+'</span>';
+    if (pct > 15) h += '<span style="font-size:.8rem;font-weight:700;color:#fff">'+F(d[valKey])+pctLbl+'</span>';
     h += '</div></div>';
-    if (pct <= 15) h += '<span style="font-size:.82rem;font-weight:700;color:var(--navy)">'+F(d[valKey])+'</span>';
+    if (pct <= 15) h += '<span style="font-size:.82rem;font-weight:700;color:var(--navy)">'+F(d[valKey])+pctLbl+'</span>';
     h += '</div>';
   });
   h += '</div>';
