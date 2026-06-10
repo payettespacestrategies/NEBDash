@@ -1566,9 +1566,9 @@ function renderMix(d) {
   // attach "% of total NASF" for the bar-chart data labels.
   mergedBreakdown.forEach(function(t){ t.pctTotal = d.piNASF > 0 ? Math.round(t.totalNASF / d.piNASF * 100) : 0; });
   h += '<div class="card"><div class="card-title">Lab Space by Typology</div>';
-  h += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:18px;align-items:start">';
+  h += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:18px;align-items:center">';
   h += '<div>'+renderBarChart(mergedBreakdown.filter(function(t){return t.totalNASF>0}), 'totalNASF', 'label', 'color')+'</div>';
-  h += '<div><table class="comp"><tr><th>Lab Type</th><th>PIs</th><th>Lab</th><th>Write-Up</th><th>Office</th><th>Total NASF</th><th>% of Labs</th></tr>';
+  h += '<div><table class="comp" style="font-family:\'Roboto\',sans-serif"><tr><th>Lab Type</th><th>PIs</th><th>Lab</th><th>Write-Up</th><th>Office</th><th>Total NASF</th><th>% of Labs</th></tr>';
   var _sumLab=0, _sumWU=0, _sumOff=0;
   mergedBreakdown.forEach(function(t){
     if (t.totalNASF === 0 && t.id !== 'comp') return;
@@ -1618,9 +1618,9 @@ function renderMix(d) {
         pctTotal: _themeTotal>0?Math.round(nasf/_themeTotal*100):0 };
     });
     h += '<div class="card"><div class="card-title">Thematic Research Space Mix</div>';
-    h += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:18px;align-items:start">';
+    h += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:18px;align-items:center">';
     h += '<div>'+renderBarChart(_rows.filter(function(t){return t.totalNASF>0}), 'totalNASF', 'label', 'color')+'</div>';
-    h += '<div><table class="comp"><tr><th>Theme</th><th>PIs</th><th>Lab</th><th>Write-Up</th><th>Office</th><th>Total NASF</th><th>% of Total</th></tr>';
+    h += '<div><table class="comp" style="font-family:\'Roboto\',sans-serif"><tr><th>Theme</th><th>PIs</th><th>Lab</th><th>Write-Up</th><th>Office</th><th>Total NASF</th><th>% of Total</th></tr>';
     var _sL=0,_sW=0,_sO=0,_sP=0;
     _rows.forEach(function(t){
       var pct = _themeTotal>0?Math.round(t.totalNASF/_themeTotal*100):0;
@@ -5217,7 +5217,7 @@ function renderDonut(segments, totalVal, centerLabel, centerSub, size) {
 function renderBarChart(data, valKey, labelKey, colorKey) {
   if (data.length === 0) return '<div style="color:var(--mut);text-align:center;padding:20px">No data</div>';
   var maxVal = Math.max.apply(null, data.map(function(d){return d[valKey]}));
-  var h = '<div style="padding:8px 0">';
+  var h = '<div style="padding:8px 0;font-family:\'Roboto\',sans-serif">';
   data.forEach(function(d) {
     var pct = maxVal > 0 ? (d[valKey] / maxVal * 100) : 0;
     // v0.8.24: optional "% of total" data label — pass d.pctTotal (already rounded).
