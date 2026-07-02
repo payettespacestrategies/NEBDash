@@ -6430,6 +6430,191 @@ function _buildScenarioCostsSheet(wb) {
   XLSX.utils.book_append_sheet(wb, ws, 'Scenario Costs');
 }
 
+// v0.8.26: "Costs Breakdown by Program Element" — one sheet per scenario,
+// modeled on the Program Elements | Costs Breakdown slide. Columns = every
+// Cost Detail line (named + color-coded via its Fitout Rate Menu mapping) plus
+// a BUILDING SHELL column (core & shell + site on the non-program GSF
+// remainder) so the TOTAL column reconciles exactly to the scenario's Total
+// Project Cost. Rows below Base Construction mirror the HTML's Project Cost
+// Buildup (each markup = base × pct ÷ (1−Σ), i.e. % of total project cost);
+// design contingency + tariff rows appear only when nonzero. All cells are
+// live formulas driven by the blue ASSUMPTIONS block beneath the table.
+function _buildCostBreakdownSheets(wb) {
+  var scs = S.scenarios || []; if (!scs.length) return;
+  if (typeof _recomputeScenarioData === 'function') _recomputeScenarioData();
+  var CATHEX = { research:'F2AA9C', office:'B6CDEF', collaboration:'FFDF5A', support:'C2C3C8',
+                 learning:'66C6C1', core:'E086C0', coreshell:'8A9099', site:'AECF9C', shell:'F8D5CC' };
+  var NAVY='1B3A5C', DARK='232A38', BAND='DCE6F1', GREYB='8A9099', PURPLE='6B2FA0', PURPLEBG='F3EDFA';
+  var Zc='"$"#,##0', Za='#,##0', Zr='"$"#,##0"/SF"';
+  var warm = (window.BENCH_RATES||[]).filter(function(b){ return b.key==='warm_shell'; })[0];
+  var warmRate = warm ? warm.rate : 250;
+  function xs(o){ o=o||{}; if(!o.font) o.font='Roboto'; return _xstyle(o); }
+  var bB = { bottom:{ style:'thin', color:'C9CDD4' } };
+
+  scs.forEach(function(sc, si) {
+    if (!sc || !sc.data || !sc.data.cost) return;
+    var cc = sc.data.cost, st = (sc.state||{}), c = st.cost||{};
+    var fsx = st.floorStacking||{};
+    var circ = (fsx.circulation_pct_global!=null)?fsx.circulation_pct_global:0.18;
+    var bs = (fsx.building_support_pct_global!=null)?fsx.building_support_pct_global:0.05;
+    var bm = c.benchMap||{};
+    function menuOf(p){ var bk=bm[p.mapType+':'+p.mapKey]; return (window.BENCH_RATES||[]).filter(function(x){return x.key===bk})[0]||null; }
+    var lines = [];
+    ['research','core','other','unalloc'].forEach(function(g){
+      (cc.progLines||[]).forEach(function(p){ if(p.group===g) lines.push(p); });
+    });
+    var nL = lines.length, cShell = 2+nL, cTot = cShell+1;
+    var pct = {
+      design: c.designContingencyPct||0, constr: c.constructionContingencyPct||0,
+      esc: cc.escalationPct||0, tariff: (cc.tariffPct!=null?cc.tariffPct:(c.tariffPct||0)),
+      prof: c.professionalServicesPct||0, owner: c.ownerWorkPct||0,
+      projc: c.projectContingencyPct||0, permit: c.permitsPct||0, pm: c.pmFeePct||0
+    };
+    var eS = { bq:(c.baseQuarter!=null?c.baseQuarter:4), by:(c.baseYear||2025),
+               tq:(c.escalationQuarter!=null?c.escalationQuarter:4), ty:(c.escalationYear||2028) };
+    var escLbl = 'Q'+eS.bq+' '+eS.by+' → Q'+eS.tq+' '+eS.ty;
+
+    // dynamic row layout (design/tariff only when nonzero)
+    var r = { chip:4, hdr:5, menu:6, fit:7, areas:8, nsf:9, dgsf:10, gsf:11, con:12, core:13, sited:14, fit2:15, base:16 };
+    var rr = 17;
+    var hardRows = [];   // markup rows between base and hard
+    if (pct.design > 0) { r.design = rr++; hardRows.push(r.design); }
+    r.ccon = rr++; hardRows.push(r.ccon);
+    r.esc = rr++; hardRows.push(r.esc);
+    if (pct.tariff > 0) { r.tariff = rr++; hardRows.push(r.tariff); }
+    r.hard = rr++; r.soft = rr++;
+    r.prof = rr++; r.owner = rr++; r.projc = rr++; r.permit = rr++; r.pm = rr++;
+    r.tpc = rr++; r.shell = rr++;
+    var A0 = r.shell + 4;   // assumptions block start
+
+    var ws = {};
+    // assumptions block
+    var ass = [
+      ['Scenario GSF', Math.round(sc.data.totalGSF||0), Za],
+      ['Circulation % (of GSF)', circ, '0%'],
+      ['Building support % (of GSF)', bs, '0%'],
+      ['NASF share (1-circ-bs)', null, '0.0%'],
+      ['Core & shell $/GSF', c.coreShellRate||0, Zc],
+      ['Site & demo $/GSF', c.siteRate||0, Zc],
+      ['Warm shell $/SF (menu)', warmRate, Zc],
+      ['Design contingency %', pct.design, '0.0%'],
+      ['Construction contingency %', pct.constr, '0.0%'],
+      ['Escalation % ('+escLbl+')', pct.esc, '0.00%'],
+      ['Tariff %', pct.tariff, '0.0%'],
+      ['Professional services %', pct.prof, '0.0%'],
+      ['Owner work %', pct.owner, '0.0%'],
+      ['Project contingency %', pct.projc, '0.0%'],
+      ['Permits %', pct.permit, '0.0%'],
+      ['PM fee %', pct.pm, '0.0%'],
+      ['Σ markups (% of project)', null, '0.0%']
+    ];
+    _xset(ws, A0-1, 1, { v:'ASSUMPTIONS  (Fitout Rate Menu + Project Cost Buildup)', s:xs({bold:true,size:9,color:NAVY}) });
+    ass.forEach(function(a,i){
+      var row = A0+i;
+      _xset(ws, row, 1, { v:a[0], s:xs({size:9}) });
+      if (a[0].indexOf('NASF share')===0)      _xset(ws, row, 2, { f:'1-B'+(A0+1)+'-B'+(A0+2), z:a[2], s:xs({size:9}) });
+      else if (a[0].indexOf('Σ')===0)     _xset(ws, row, 2, { f:'SUM(B'+(A0+7)+':B'+(A0+15)+')', z:a[2], s:xs({size:9}) });
+      else _xset(ws, row, 2, { v:a[1], z:a[2], s:xs({size:9,color:'0000FF'}) });
+    });
+    var AX = { gsfA:A0, circ:A0+1, bs:A0+2, share:A0+3, cs:A0+4, site:A0+5, warm:A0+6,
+               design:A0+7, ccon:A0+8, esc:A0+9, tariff:A0+10, prof:A0+11, owner:A0+12,
+               projc:A0+13, permit:A0+14, pm:A0+15, sig:A0+16 };
+    function ax(k){ return '$B$'+AX[k]; }
+
+    // title + labels
+    _xset(ws, 1, 1, { v:'Program Elements | Costs Breakdown', s:xs({bold:true,size:16,color:PURPLE}) });
+    _xset(ws, 2, 1, { v:sc.name+(sc.desc?('  —  '+sc.desc):''), s:xs({size:11,color:'5A5F66'}) });
+    function lbl(row, txt, o){ o=o||{}; _xset(ws, row, 1, { v:txt, s:xs({size:o.size||10, bold:o.bold, italic:o.italic, color:o.color, fill:o.fill}) }); }
+    lbl(r.hdr,'PROGRAM',{bold:true,size:8,color:'FFFFFF',fill:DARK});
+    lbl(r.menu,'Rate (fit-out rate menu)',{italic:true,size:8,color:'5A5F66'});
+    lbl(r.fit,'Fitout cost  (DGSF × rate)',{bold:true,color:PURPLE,fill:PURPLEBG});
+    lbl(r.nsf,'NSF  (Net Square Feet)');
+    lbl(r.dgsf,'DGSF  (NSF + '+Math.round(circ*100)+'% Circulation)');
+    lbl(r.gsf,'GSF  (DGSF + '+Math.round(bs*100)+'% Building Support)');
+    lbl(r.core,'Core & shell  ($'+F(c.coreShellRate||0)+'/GSF)');
+    lbl(r.sited,'Site & demo  ($'+F(c.siteRate||0)+'/GSF)');
+    lbl(r.fit2,'Fitout  (from above)');
+    lbl(r.base,'Base construction',{bold:true,fill:BAND});
+    if (r.design) lbl(r.design,'Design contingency  ('+(pct.design*100).toFixed(0)+'%)');
+    lbl(r.ccon,'Construction contingency  ('+(pct.constr*100).toFixed(0)+'%)');
+    lbl(r.esc,'Escalation  ('+(pct.esc*100).toFixed(1)+'%, '+escLbl+')');
+    if (r.tariff) lbl(r.tariff,'Tariff  ('+(pct.tariff*100).toFixed(1)+'%)');
+    lbl(r.hard,'Hard cost',{bold:true,fill:BAND});
+    lbl(r.prof,'Professional services  ('+(pct.prof*100).toFixed(0)+'%)');
+    lbl(r.owner,'Owner work  ('+(pct.owner*100).toFixed(0)+'%)');
+    lbl(r.projc,'Project contingency  ('+(pct.projc*100).toFixed(0)+'%)');
+    lbl(r.permit,'Permits  ('+(pct.permit*100).toFixed(0)+'%)');
+    lbl(r.pm,'PM fee  ('+(pct.pm*100).toFixed(0)+'%)');
+    lbl(r.tpc,'TOTAL PROJECT COST',{bold:true,size:11,color:'FFFFFF',fill:'000000'});
+    lbl(r.shell,'IF SHELLED  ($'+F(warmRate)+'/SF fitout)',{bold:true,color:'FFFFFF',fill:GREYB});
+    function section(row, txt){
+      _xset(ws, row, 1, { v:txt, s:xs({bold:true,size:9,color:'5A5F66'}) });
+      for (var cx=2; cx<=cTot; cx++) _xset(ws, row, cx, { s:xs({}) });
+    }
+    section(r.areas,'AREAS'); section(r.con,'CONSTRUCTION'); section(r.soft,'PROJECT SOFT COSTS');
+
+    // markup helper rows shared by every column
+    var mkRows = [];
+    if (r.design) mkRows.push([r.design,'design']);
+    mkRows.push([r.ccon,'ccon'],[r.esc,'esc']);
+    if (r.tariff) mkRows.push([r.tariff,'tariff']);
+    mkRows.push([r.prof,'prof'],[r.owner,'owner'],[r.projc,'projc'],[r.permit,'permit'],[r.pm,'pm']);
+
+    // per-column content (data lines + BUILDING SHELL)
+    for (var i=0; i<=nL; i++) {
+      var col = 2+i, L = _xa(1,col).replace(/[0-9]/g,'');
+      var isShellCol = (i===nL), p = isShellCol?null:lines[i], me = p?menuOf(p):null;
+      var hexv = isShellCol ? CATHEX.coreshell : (CATHEX[(me&&me.cat)||''] || 'D9D9D9');
+      _xset(ws, r.chip, col, { v:(p?p.rate:''), z:Zr, s:xs({bold:true,size:10,fill:hexv,halign:'center'}) });
+      _xset(ws, r.hdr, col, { v:(isShellCol?'BUILDING SHELL':String(p.cat).toUpperCase()), s:xs({bold:true,size:8,color:'FFFFFF',fill:DARK,halign:'center',valign:'center',wrap:true}) });
+      _xset(ws, r.menu, col, { v:(isShellCol?'(non-program GSF)':(me?me.label:'— custom —')), s:xs({italic:true,size:8,color:'5A5F66',halign:'center'}) });
+      function num(row, o){ o.s = o.s || xs({size:10,halign:'right',border:bB}); _xset(ws, row, col, o); }
+      if (!isShellCol) {
+        num(r.nsf,  { v:p.nasf, z:Za });
+        num(r.dgsf, { f:L+r.nsf+'+ROUND('+L+r.nsf+'*'+ax('circ')+'/'+ax('share')+',0)', z:Za });
+        num(r.gsf,  { f:L+r.dgsf+'+ROUND('+L+r.nsf+'*'+ax('bs')+'/'+ax('share')+',0)', z:Za });
+        _xset(ws, r.fit, col, { f:L+r.dgsf+'*'+L+r.chip, z:Zc, s:xs({bold:true,size:10,color:PURPLE,fill:PURPLEBG,halign:'right'}) });
+        _xset(ws, r.shell, col, { f:'('+L+r.core+'+'+L+r.sited+'+'+L+r.dgsf+'*'+ax('warm')+')/(1-'+ax('sig')+')', z:Zc, s:xs({bold:true,size:10,color:'FFFFFF',fill:GREYB,halign:'right'}) });
+      } else {
+        num(r.nsf, { v:'' }); num(r.dgsf, { v:'' });
+        num(r.gsf, { f:ax('gsfA')+'-SUM(B'+r.gsf+':'+_xa(1,col-1).replace(/[0-9]/g,'')+r.gsf+')', z:Za });
+        _xset(ws, r.fit, col, { v:0, z:Zc, s:xs({size:10,color:PURPLE,fill:PURPLEBG,halign:'right'}) });
+        _xset(ws, r.shell, col, { f:L+r.tpc, z:Zc, s:xs({bold:true,size:10,color:'FFFFFF',fill:GREYB,halign:'right'}) });
+      }
+      num(r.core,  { f:L+r.gsf+'*'+ax('cs'), z:Zc });
+      num(r.sited, { f:L+r.gsf+'*'+ax('site'), z:Zc });
+      num(r.fit2,  { f:L+r.fit, z:Zc });
+      _xset(ws, r.base, col, { f:'SUM('+L+r.core+':'+L+r.fit2+')', z:Zc, s:xs({bold:true,size:10,fill:BAND,halign:'right'}) });
+      mkRows.forEach(function(mr){ num(mr[0], { f:L+r.base+'*'+ax(mr[1])+'/(1-'+ax('sig')+')', z:Zc }); });
+      var hardF = L+r.base+'+SUM('+L+hardRows[0]+':'+L+hardRows[hardRows.length-1]+')';
+      _xset(ws, r.hard, col, { f:hardF, z:Zc, s:xs({bold:true,size:10,fill:BAND,halign:'right'}) });
+      _xset(ws, r.tpc, col, { f:L+r.hard+'+SUM('+L+r.prof+':'+L+r.pm+')', z:Zc, s:xs({bold:true,size:11,color:'FFFFFF',fill:'000000',halign:'right'}) });
+    }
+    // TOTAL column
+    var LT = _xa(1,cTot).replace(/[0-9]/g,''), LE = _xa(1,cTot-1).replace(/[0-9]/g,'');
+    _xset(ws, r.hdr, cTot, { v:'TOTAL', s:xs({bold:true,size:9,color:'FFFFFF',fill:'000000',halign:'center',valign:'center'}) });
+    _xset(ws, r.menu, cTot, { v:'—', s:xs({size:8,halign:'center'}) });
+    [r.nsf,r.dgsf,r.gsf].forEach(function(row){ _xset(ws, row, cTot, { f:'SUM(B'+row+':'+LE+row+')', z:Za, s:xs({bold:true,size:10,halign:'right',border:bB}) }); });
+    var costRows = [r.fit,r.core,r.sited,r.fit2,r.base].concat(hardRows,[r.hard,r.prof,r.owner,r.projc,r.permit,r.pm,r.tpc,r.shell]);
+    costRows.forEach(function(row){
+      var st2 = xs({bold:true,size:10,halign:'right',border:bB});
+      if (row===r.base||row===r.hard) st2 = xs({bold:true,size:10,fill:BAND,halign:'right'});
+      if (row===r.tpc) st2 = xs({bold:true,size:11,color:'FFFFFF',fill:'000000',halign:'right'});
+      if (row===r.shell) st2 = xs({bold:true,size:10,color:'FFFFFF',fill:GREYB,halign:'right'});
+      if (row===r.fit) st2 = xs({bold:true,size:10,color:PURPLE,fill:PURPLEBG,halign:'right'});
+      _xset(ws, row, cTot, { f:'SUM(B'+row+':'+LE+row+')', z:Zc, s:st2 });
+    });
+    _xset(ws, r.shell+2, 1, { v:'Source: NEB Dashboard — rates from the Fitout Rate Menu; markups from the Project Cost Buildup (% of total project cost); core & shell + site applied to GSF.', s:xs({italic:true,size:8,color:'8A9099'}) });
+
+    var cols=[{wch:34}];
+    for (var cx=2; cx<=cTot; cx++) cols.push({wch:13.5});
+    ws['!cols']=cols;
+    ws['!rows']=[]; ws['!rows'][r.hdr-1]={hpt:30};
+    ws['!ref']='A1:'+_xa(A0+ass.length+1, cTot);
+    XLSX.utils.book_append_sheet(wb, ws, 'Cost Breakdown '+(si+1));
+  });
+}
+
 function _downloadBlob(blob, filename) {
   var url = URL.createObjectURL(blob);
   var a = document.createElement('a');
@@ -6443,6 +6628,7 @@ function exportXLSX() {
   var ctx = _buildProgramSheet(wb);
   _buildCostSheet(wb, ctx);
   _buildScenarioCostsSheet(wb);
+  _buildCostBreakdownSheets(wb);
   var fname = 'Northwestern_NEB_Program_Export_' + new Date().toISOString().slice(0,10) + '.xlsx';
   // xlsx-js-style won't emit the sheet-level "hide gridlines" flag, so write to
   // an array and post-process the worksheet XML with JSZip to inject
