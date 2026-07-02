@@ -12380,7 +12380,17 @@ window._skillUpdateMep = function(rowId, field, val) {
 buildPresetScenarios();
 _enforceGlobalCostDefaults();
 if (typeof _recomputeScenarioData === 'function') _recomputeScenarioData();
-render();
+// v0.8.27: auto-load the active scenario at startup so the dashboard always
+// edits a live scenario — Cost Detail edits (rate dropdowns, sliders) flow
+// straight into the loaded scenario's snapshot and the comparison charts can
+// never diverge from the table. Loading another scenario switches which one
+// is being edited (existing behavior). loadScenario() calls render().
+if (S.scenarios && S.scenarios.length) {
+  var _autoLoad = (S.activeScenario >= 0 && S.activeScenario < S.scenarios.length) ? S.activeScenario : 0;
+  loadScenario(_autoLoad);
+} else {
+  render();
+}
 
 
 // ──────────────────────────────────────────────────────────────────
