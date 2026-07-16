@@ -168,14 +168,17 @@ footer .ft-right{display:flex;align-items:center;gap:12px}
 .mep-tab .sw-proc{background:var(--mep-amber)}
 .mep-tab .leg-note{margin-left:auto;font-size:10px;color:#AAA;font-style:italic}
 
-.mep-tab .mep-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
-@media (max-width:1100px){.mep-tab .mep-grid{grid-template-columns:repeat(2,1fr)}}
+/* v0.8.36: Technical Criteria card restyle — larger type, fixed 168px label
+   column, right-aligned values on a clean edge (no pill jogging), tabular
+   numerals. Header band keeps the typology color (lab.color). Class names
+   and DOM structure unchanged so the edit write-back + sync stay wired. */
+.mep-tab .mep-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(430px,1fr));gap:22px}
 @media (max-width:720px){.mep-tab .mep-grid{grid-template-columns:1fr}}
 
-.mep-tab .mep-card{background:var(--mep-white);border-radius:12px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,.06);border:none;padding:0;margin:0}
-.mep-tab .mep-card-header{display:flex;align-items:center;justify-content:space-between;padding:14px 18px}
-.mep-tab .mep-card-header h2{font-size:15px;font-weight:600;color:var(--mep-white);margin:0}
-.mep-tab .mep-card-header .nsf{font-size:11px;color:rgba(255,255,255,.75);font-weight:500}
+.mep-tab .mep-card{background:var(--mep-white);border-radius:14px;overflow:hidden;box-shadow:0 1px 2px rgba(16,24,40,.04);border:1px solid #E3E6EA;padding:0;margin:0}
+.mep-tab .mep-card-header{display:flex;align-items:center;justify-content:space-between;padding:15px 22px;gap:12px}
+.mep-tab .mep-card-header h2{font-size:19px;font-weight:700;color:var(--mep-white);margin:0;line-height:1.25}
+.mep-tab .mep-card-header .nsf{font-size:14px;color:rgba(255,255,255,.85);font-weight:600;white-space:nowrap;margin-left:auto}
 .mep-tab .th-coral{background:var(--mep-coral)}
 .mep-tab .th-teal{background:var(--mep-teal)}
 .mep-tab .th-blue{background:var(--mep-blue)}
@@ -186,44 +189,46 @@ footer .ft-right{display:flex;align-items:center;gap:12px}
 .mep-tab .th-dry{background:var(--dry-color)}
 .mep-tab .th-robotics{background:var(--robotics-color)}
 
-.mep-tab .comp-row{display:flex;align-items:center;gap:8px;padding:8px 18px 0}
-.mep-tab .comp-track{flex:1;height:4px;background:var(--mep-rule);border-radius:2px;overflow:hidden}
+.mep-tab .comp-row{display:flex;align-items:center;gap:8px;padding:10px 22px 0;justify-content:flex-end}
+.mep-tab .comp-track{flex:0 0 90px;height:4px;background:#E3E6EA;border-radius:2px;overflow:hidden}
 .mep-tab .comp-fill{height:100%;border-radius:2px;background:var(--mep-teal)}
-.mep-tab .comp-pct{font-size:10px;color:var(--mep-mid);font-family:'DM Mono',monospace}
+.mep-tab .comp-pct{font-size:12px;color:#5B6470}
 
-.mep-tab .mep-card-body{padding:12px 18px 16px}
+.mep-tab .mep-card-body{padding:4px 22px 20px}
 
-.mep-tab .mep-section{margin-bottom:12px}
-.mep-tab .mep-section:last-child{margin-bottom:0}
-.mep-tab .sec-label{font-size:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--mep-mid);padding-bottom:6px;border-bottom:1px solid var(--mep-rule);margin-bottom:6px}
+.mep-tab .mep-section{margin-top:14px;margin-bottom:0}
+.mep-tab .sec-label{font-size:12px;font-weight:700;letter-spacing:.8px;text-transform:uppercase;color:#5B6470;padding-bottom:6px;border-bottom:1px solid #E3E6EA;margin-bottom:4px;display:flex;align-items:baseline}
+.mep-tab .sec-label > span{margin-left:auto;letter-spacing:.6px}
 
-.mep-tab .field-row{display:flex;align-items:center;justify-content:space-between;padding:4px 0;gap:8px}
-.mep-tab .f-label{font-size:12px;color:var(--mep-mid);flex:1}
+.mep-tab .field-row{position:relative;display:grid;grid-template-columns:168px minmax(0,1fr);align-items:baseline;column-gap:8px;padding:6px 0;border-bottom:1px solid #F1F2F4}
+.mep-tab .mep-section .field-row:last-child{border-bottom:none}
+.mep-tab .f-label{font-size:14.5px;color:#1C2024;font-weight:400;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 
-.mep-tab .f-input-wrap{display:flex;align-items:center;gap:0;background:var(--mep-tag-bg);border-radius:5px;border:1px solid transparent;transition:border-color .15s,background .15s;min-width:130px}
+.mep-tab .f-input-wrap{display:flex;align-items:baseline;justify-content:flex-end;gap:0;background:transparent;border-radius:5px;border:1px solid transparent;transition:border-color .15s,background .15s;min-width:0}
+.mep-tab .f-input-wrap:hover{border-color:#D7DBDF}
 .mep-tab .f-input-wrap:focus-within{border-color:var(--mep-teal)!important;background:#F0FAFA!important}
-.mep-tab .f-input-wrap.tbd{background:#FFF7E6;border:1px dashed var(--mep-amber)}
-.mep-tab .f-input-wrap.na{background:#F5F5F5}
-.mep-tab .f-input-wrap.computed{background:#F0FAFA;border:1px solid #C8EDEA}
-.mep-tab .f-num{font-size:12px;font-weight:500;color:var(--mep-ink);font-family:'DM Mono',monospace;background:transparent;border:none;outline:none;padding:3px 0 3px 9px;min-width:0;flex:1;text-align:right;cursor:text}
+.mep-tab .f-input-wrap.tbd,.mep-tab .f-input-wrap.na,.mep-tab .f-input-wrap.computed{background:transparent;border:1px solid transparent}
+.mep-tab .f-input-wrap.tbd:hover,.mep-tab .f-input-wrap.na:hover{border-color:#D7DBDF}
+.mep-tab .f-num{font-size:14.5px;font-weight:600;color:#1C2024;font-family:inherit;font-variant-numeric:tabular-nums;background:transparent;border:none;outline:none;padding:0 0 0 4px;min-width:0;flex:1;text-align:right;cursor:text}
 .mep-tab .f-num.tbd{color:var(--mep-amber)}
-.mep-tab .f-num.na{color:#AAA}
-.mep-tab .f-num.computed{color:var(--mep-teal);font-weight:600;cursor:default}
-.mep-tab .f-unit{font-size:11px;color:var(--mep-mid);font-family:'DM Mono',monospace;padding:3px 9px 3px 4px;white-space:nowrap;user-select:none;flex-shrink:0}
+.mep-tab .f-num.na{color:#AAB0B6}
+.mep-tab .f-num.computed{color:#1F7A4D;font-weight:600;cursor:default}
+.mep-tab .f-unit{font-size:13px;color:#5B6470;font-family:inherit;font-weight:500;padding:0 2px 0 4px;white-space:nowrap;user-select:none;flex-shrink:0}
 .mep-tab .f-input-wrap.tbd .f-unit{color:#c8922a}
-.mep-tab .f-input-wrap.computed .f-unit{color:var(--mep-teal);opacity:.7}
+.mep-tab .f-input-wrap.computed .f-unit{color:#1F7A4D;opacity:.7}
 
-.mep-tab .f-val{font-size:12px;font-weight:500;color:var(--mep-ink);font-family:'DM Mono',monospace;background:var(--mep-tag-bg);padding:3px 9px;border-radius:5px;min-width:130px;text-align:center;cursor:text;border:1px solid transparent;outline:none;transition:border-color .15s,background .15s;display:inline-block}
-.mep-tab .f-val:hover{border-color:var(--mep-rule);background:#EAE6E1}
-.mep-tab .f-val:focus{border-color:var(--mep-teal)!important;background:#F0FAFA!important}
-.mep-tab .f-val.tbd{color:var(--mep-amber);background:#FFF7E6;border:1px dashed var(--mep-amber)}
-.mep-tab .f-val.na{color:#AAA;background:#F5F5F5}
-.mep-tab .f-val.computed{background:#F0FAFA;color:var(--mep-teal);border:1px solid #C8EDEA;cursor:default;font-weight:600}
-.mep-tab .f-val.computed:hover{background:#F0FAFA;border-color:#C8EDEA}
+.mep-tab .f-val{font-size:14.5px;font-weight:600;color:#1C2024;font-family:inherit;font-variant-numeric:tabular-nums;background:transparent;padding:0 2px;border-radius:5px;min-width:0;text-align:right;cursor:text;border:1px solid transparent;outline:none;transition:border-color .15s,background .15s;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mep-tab .f-val:hover{border-color:#D7DBDF;background:transparent}
+.mep-tab .f-val:focus{border-color:var(--mep-teal)!important;background:#F0FAFA!important;white-space:normal}
+.mep-tab .f-val.tbd{color:var(--mep-amber);background:transparent;border:1px solid transparent}
+.mep-tab .f-val.tbd:hover{border-color:#D7DBDF}
+.mep-tab .f-val.na{color:#AAB0B6;background:transparent}
+.mep-tab .f-val.computed{background:transparent;color:#1F7A4D;border:1px solid transparent;cursor:default;font-weight:600;font-family:'DM Mono',monospace;font-size:12.5px}
+.mep-tab .f-val.computed:hover{background:transparent;border-color:transparent}
 
-.mep-tab .f-select{font-size:12px;font-weight:500;color:var(--mep-ink);font-family:'DM Mono',monospace;background:var(--mep-tag-bg);padding:3px 28px 3px 9px;border-radius:5px;min-width:130px;border:1px solid transparent;outline:none;cursor:pointer;appearance:none;-webkit-appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%236B6B6B' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 9px center;transition:border-color .15s,background-color .15s}
-.mep-tab .f-select:hover{border-color:var(--mep-rule)}
-.mep-tab .f-select:focus{border-color:var(--mep-teal);background-color:#F0FAFA}
+.mep-tab .f-select{font-size:14.5px;font-weight:600;color:#1C2024;font-family:inherit;background:transparent;padding:0 2px;border-radius:5px;min-width:0;width:100%;text-align:right;border:1px solid transparent;outline:none;cursor:pointer;appearance:none;-webkit-appearance:none;background-image:none;text-overflow:ellipsis;transition:border-color .15s,background-color .15s}
+.mep-tab .f-select:hover{border-color:#D7DBDF}
+.mep-tab .f-select:focus{border-color:var(--mep-teal);background-color:#F0FAFA;text-align:left}
 
 .mep-tab .f-input-wrap.engineer{background:#F0F4FA;border:1px dashed #B0C4DE}
 .mep-tab .f-input-wrap.engineer .f-num{color:var(--mep-blue)}
@@ -231,12 +236,13 @@ footer .ft-right{display:flex;align-items:center;gap:12px}
 .mep-tab .f-input-wrap.engineer:focus-within{border-color:var(--mep-blue)!important;background:#EAF0FA!important}
 .mep-tab .eng-label{color:var(--mep-blue)!important;font-style:italic}
 
-.mep-tab .thermal-pair{display:flex;gap:6px;align-items:center;justify-content:flex-end}
-.mep-tab .thermal-chip{font-size:11px;font-weight:500;font-family:'DM Mono',monospace;padding:3px 8px;border-radius:5px;cursor:text;border:1px solid transparent;outline:none;min-width:58px;text-align:center;transition:border-color .15s}
+.mep-tab .thermal-pair{display:grid;grid-template-columns:minmax(0,1fr) 76px;column-gap:14px;align-items:baseline}
+.mep-tab .thermal-chip{font-size:14.5px;font-weight:600;font-family:inherit;font-variant-numeric:tabular-nums;padding:0 2px;border-radius:5px;cursor:text;border:1px solid transparent;outline:none;min-width:0;text-align:right;transition:border-color .15s;background:transparent}
+.mep-tab .thermal-chip:hover{border-color:#D7DBDF}
 .mep-tab .thermal-chip:focus{border-color:var(--mep-teal);background:#F0FAFA!important}
-.mep-tab .tc-temp{background:#FFF0EE;color:var(--mep-coral)}
-.mep-tab .tc-rh{background:#EEF5FF;color:var(--mep-blue)}
-.mep-tab .tc-temp.tbd,.mep-tab .tc-rh.tbd{background:#FFF7E6;color:var(--mep-amber);border:1px dashed var(--mep-amber)}
+.mep-tab .tc-temp{background:transparent;color:#C14F3D}
+.mep-tab .tc-rh{background:transparent;color:#1C2024}
+.mep-tab .tc-temp.tbd,.mep-tab .tc-rh.tbd{background:transparent;color:var(--mep-amber);border:1px solid transparent}
 
 /* MEP print rules — keep cards tight, drop hover/edit hints */
 @media print{
@@ -258,9 +264,13 @@ footer .ft-right{display:flex;align-items:center;gap:12px}
   .mep-tab .mep-cat-chip .cat-x,
   .mep-tab .mep-tools,
   .mep-tab .mep-cat-pop{display:none!important}
-  /* Combo (datalist) fields: drop the dropdown caret and let the input grow so
-     long values ("All Air (no terminal reheat)") aren't clipped on paper. */
-  .mep-tab .f-select{background-image:none!important;padding-right:9px!important;flex:1 1 auto;max-width:62%;min-width:0}
+  /* v0.8.36: flat right-aligned layout prints as-is; just size type for paper
+     and make sure the combo input never clips its value. */
+  .mep-tab .f-select{background-image:none!important;width:100%!important;text-align:right!important}
+  .mep-tab .f-label,.mep-tab .f-val,.mep-tab .f-num,.mep-tab .f-select,.mep-tab .thermal-chip{font-size:10pt!important}
+  .mep-tab .f-unit{font-size:8.5pt!important}
+  .mep-tab .mep-card-header h2{font-size:13pt!important}
+  .mep-tab .mep-na-btn{display:none!important}
 }
 /* ── v0.8.35: Program Elements | Costs Breakdown table ── */
 .pe-cost-table{width:100%;border-collapse:collapse;table-layout:fixed;font-family:'Roboto',sans-serif;font-size:.74rem;margin-top:10px}
@@ -7856,7 +7866,7 @@ function mepCard(lab) {
         // sash opening. Per-hood CFM = width × (sash/12) × 100 fpm.
         (typeof _skillRenderHoodCFMRow === 'function' ? _skillRenderHoodCFMRow(lab) : '')+
       '</div>'+
-      '<div class="mep-section"><div class="sec-label">Thermal &nbsp;<span style="font-weight:400;color:#AAA;font-size:9px">TEMP &nbsp; RH</span></div>'+
+      '<div class="mep-section"><div class="sec-label">Thermal &nbsp;<span style="font-weight:700;color:#5B6470;font-size:11px">TEMP&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;RH</span></div>'+
         mepThermalRow('Summer Setpoint', lab.thermal.temp_summer, lab.thermal.rh_summer)+
         mepThermalRow('Winter Setpoint', lab.thermal.temp_winter, lab.thermal.rh_winter)+
         mepField('Tolerance',            lab.thermal.tolerance)+
@@ -8616,15 +8626,15 @@ if (typeof renderMEP === 'function') {
       '.mep-drag-handle:active{cursor:grabbing}',
       '.mep-collapse-btn{background:rgba(255,255,255,.2);color:#fff;border:none;border-radius:4px;width:22px;height:22px;margin-left:6px;cursor:pointer;font-size:12px;line-height:1;font-weight:700;flex-shrink:0}',
       '.mep-lock{font-size:10px;color:rgba(255,255,255,.8);margin-left:6px;font-weight:400}',
-      '.mep-cat-row{padding:6px 14px 8px;background:#FAFBFC;border-bottom:1px solid #E6E8EC;font-size:11px;display:flex;align-items:center;gap:6px;flex-wrap:wrap}',
-      '.mep-cat-row .cat-label{color:#5A5F66;font-weight:600;text-transform:uppercase;letter-spacing:.05em;font-size:9px;margin-right:2px}',
-      '.mep-cat-chip{display:inline-flex;align-items:center;gap:5px;padding:2px 8px;border-radius:11px;background:#fff;border:1px solid #C2C3C8;font-size:10px;color:#2A2D33;font-weight:600;font-family:Sora,sans-serif}',
+      '.mep-cat-row{padding:12px 22px 4px;background:#fff;border-bottom:none;font-size:13px;display:flex;align-items:center;gap:10px;flex-wrap:wrap}',
+      '.mep-cat-row .cat-label{color:#5B6470;font-weight:700;text-transform:uppercase;letter-spacing:.6px;font-size:11px;margin-right:2px}',
+      '.mep-cat-chip{display:inline-flex;align-items:center;gap:6px;padding:5px 12px;border-radius:999px;background:#FAFAFA;border:1.5px solid #CFD4DA;font-size:13px;color:#1C2024;font-weight:600;font-family:inherit}',
       '.mep-cat-chip.cat-type{border-color:#1BA0F2}',
       '.mep-cat-chip.cat-core{border-color:#E086C0}',
       '.mep-cat-chip.cat-system{border-color:#98ACE5}',
       '.mep-cat-chip .cat-x{cursor:pointer;color:#7E848B;font-weight:700;font-size:11px;line-height:1}',
       '.mep-cat-chip .cat-x:hover{color:#D14A3D}',
-      '.mep-cat-add{font-size:10px;padding:2px 9px;border-radius:11px;background:#fff;border:1px dashed #98ACE5;cursor:pointer;color:#0D47A1;font-weight:600;font-family:Sora,sans-serif}',
+      '.mep-cat-add{font-size:13px;padding:5px 12px;border-radius:999px;background:#EAF2FB;border:1.5px dashed #A9C8E6;cursor:pointer;color:#2F6FB0;font-weight:600;font-family:inherit}',
       '.mep-cat-add:hover{background:#F0F3F7}',
       '.mep-cat-pop{position:absolute;z-index:9999;background:#fff;border:1px solid #C2C3C8;border-radius:6px;box-shadow:0 6px 18px rgba(0,0,0,.18);padding:10px;min-width:280px;max-height:380px;overflow-y:auto;font-family:Sora,sans-serif;font-size:11px}',
       '.mep-cat-pop .pop-grp{font-weight:700;font-size:10px;color:#5A5F66;text-transform:uppercase;letter-spacing:.05em;margin:8px 0 3px;border-top:1px solid #E6E8EC;padding-top:6px}',
@@ -9215,7 +9225,7 @@ if (typeof renderMEP === 'function') {
     st.id = '_skillMepWBStyles';
     st.textContent = [
       '.mep-tab .field-row{position:relative}',
-      '.mep-tab .mep-na-btn{opacity:0;transition:opacity .1s;font-size:9px;color:#7E848B;border:1px solid #C2C3C8;border-radius:9px;padding:0 6px;background:#fff;cursor:pointer;font-family:Sora,sans-serif;font-weight:700;letter-spacing:.04em;text-transform:uppercase;line-height:14px;margin-left:6px;flex-shrink:0;user-select:none;height:16px;align-self:center}',
+      '.mep-tab .mep-na-btn{opacity:0;transition:opacity .1s;font-size:9px;color:#7E848B;border:1px solid #C2C3C8;border-radius:9px;padding:0 6px;background:#fff;cursor:pointer;font-family:Sora,sans-serif;font-weight:700;letter-spacing:.04em;text-transform:uppercase;line-height:14px;user-select:none;height:16px;position:absolute;left:176px;top:50%;transform:translateY(-50%)}',
       '.mep-tab .field-row:hover .mep-na-btn{opacity:1}',
       '.mep-tab .mep-na-btn:hover{background:#F0F3F7;color:#0D47A1;border-color:#98ACE5}',
       '.mep-tab .mep-na-btn.is-na{opacity:1;background:#EAECEE;color:#5A5F66;border-color:#AAA}'
