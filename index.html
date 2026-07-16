@@ -262,6 +262,31 @@ footer .ft-right{display:flex;align-items:center;gap:12px}
      long values ("All Air (no terminal reheat)") aren't clipped on paper. */
   .mep-tab .f-select{background-image:none!important;padding-right:9px!important;flex:1 1 auto;max-width:62%;min-width:0}
 }
+/* ── v0.8.35: Program Elements | Costs Breakdown table ── */
+.pe-cost-table{width:100%;border-collapse:collapse;table-layout:fixed;font-family:'Roboto',sans-serif;font-size:.74rem;margin-top:10px}
+.pe-cost-table td{padding:4px 6px;text-align:center;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pe-cost-table .pe-chips td{padding:3px 3px;border:none}
+.pe-cost-table .pe-chip{display:inline-block;min-width:78%;padding:5px 4px;border-radius:6px;font-weight:900;font-size:.76rem}
+.pe-cost-table .pe-head td{background:#1B2A44;color:#fff;font-weight:900;font-size:.62rem;letter-spacing:.03em;padding:7px 4px}
+.pe-cost-table .pe-fit td{background:#F3EFFA;border-bottom:1px solid var(--bdr);padding:5px 6px}
+.pe-cost-table .pe-sec td{text-align:left;font-weight:900;color:#5A5F66;font-size:.64rem;letter-spacing:.08em;padding:7px 6px 3px;border-bottom:1.5px solid #B9BEC6}
+.pe-cost-table .pe-row td{border-bottom:1px solid var(--bdr);color:#3A4046}
+.pe-cost-table .pe-row.pe-bold td{background:#F4F5F7;color:var(--navy)}
+.pe-cost-table .pe-lbl{text-align:left!important;color:var(--navy)}
+.pe-cost-table .pe-note{color:var(--mut);font-weight:400;font-size:.66rem}
+.pe-cost-table .pe-band td{padding:8px 6px;font-weight:900;font-size:.8rem;border-bottom:2px solid #fff}
+@media print{
+  .pe-cost-card{page-break-before:always;break-inside:avoid;page-break-inside:avoid;box-shadow:none}
+  .pe-cost-card, .pe-cost-card *{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important}
+  .pe-cost-card > div[style*="overflow-x"]{overflow:visible!important}
+  .pe-cost-table{font-size:6.4pt}
+  .pe-cost-table .pe-chip{font-size:6.6pt;padding:3px 2px}
+  .pe-cost-table .pe-head td{font-size:5.4pt}
+  .pe-cost-table .pe-sec td{font-size:5.6pt}
+  .pe-cost-table .pe-note{font-size:5.4pt}
+  .pe-cost-table .pe-band td{font-size:7pt;padding:5px 4px}
+  .pe-cost-table td{padding:2.5px 3px}
+}
 </style></head><body>
 <div id="loginOverlay" class="login-overlay">
   <div class="login-box">
@@ -3784,6 +3809,9 @@ function renderCost(d) {
     h += '<div style="max-width:620px;margin-top:6px">' + _buildSelectedScenarioBreakdownTable(true) + '</div>';
   }
 
+  // v0.8.35: Program Elements | Costs Breakdown — bottom of the Cost tab.
+  h += _buildProgramElementsCostTable();
+
   h += '</div>'; // close .cost-roboto
   return h;
 }
@@ -4122,61 +4150,178 @@ function _buildScenarioEfficiencyChart() {
   h += '</svg></div></div>';
   return h;
 }
-// v0.8.34: duplicate of the Fitout Rates chart showing the ALL-IN construction
-// rate per space type — each menu entry's fit-out $/SF stacked on the Core &
-// Shell $/SF (gray base), so the bar total = total construction cost of that
-// space type. The C&S rate resolves live from the menu entry mapped on the
-// Cost Detail C&S line (default 'core_shell'), so editing that menu rate
-// re-renders the chart automatically. Site + the Core & Shell entry itself
-// are excluded (site work isn't a space type; C&S is embedded in every bar).
+// v0.8.35: Project Costs chart — FIT-OUT PROJECT TOTAL COST per program NSF,
+// matching the "Program Elements | Costs Breakdown" sheet: each menu entry's
+// fit-out $/SF, less the warm-shell rate, grossed NSF→DGSF by the circulation
+// factor, then marked up by contingency + escalation (hard) and soft costs.
+// Core & Shell + Site are carried separately (a constant $/SF PTC). All inputs
+// resolve live (Fitout Rate Menu + Project Cost Buildup), so edits re-render.
+function _projCostMult() {
+  var cs = (S && S.cost) || {};
+  var fs = (S && S.floorStacking) || {};
+  var circ = (fs.circulation_pct_global != null) ? fs.circulation_pct_global : 0.18;
+  var bs   = (fs.building_support_pct_global != null) ? fs.building_support_pct_global : 0.05;
+  var esc  = (cs.escalationPct != null) ? cs.escalationPct : 0.125;   // synced by calcCost
+  var hard = (cs.designContingencyPct || 0) + (cs.constructionContingencyPct || 0) + esc;
+  var soft = (cs.professionalServicesPct||0) + (cs.ownerWorkPct||0) + (cs.projectContingencyPct||0)
+           + (cs.permitsPct||0) + (cs.pmFeePct||0);
+  return { circ:circ, bs:bs, esc:esc, hard:hard, soft:soft, mult:(1+circ)*(1+hard)*(1+soft) };
+}
+function _warmShellRate() {
+  var b = (window.BENCH_RATES||[]).filter(function(x){ return x.key === 'warm_shell'; })[0]
+       || (window.BENCH_RATES||[]).filter(function(x){ return x.cat === 'shell'; })[0];
+  return b ? (+b.rate || 0) : 50;
+}
 function _buildProjectCostRateChart() {
   var all = (window.BENCH_RATES || []).slice();
   if (!all.length) return '';
-  // Live Core & Shell $/SF — menu entry mapped on the C&S line, else slider.
-  var _bm = (S.cost && S.cost.benchMap) || {};
-  var _bk = _bm['direct:coreShellRate'] || 'core_shell';
-  var _cse = all.filter(function(x){ return x.key === _bk; })[0];
-  var csRate = _cse ? (+_cse.rate || 0) : ((S.cost && +S.cost.coreShellRate) || 0);
-  var rates = all.filter(function(b){ return b.cat !== 'site' && b.cat !== 'coreshell'; });
+  var pm = _projCostMult(), ws = _warmShellRate();
+  var rates = all.filter(function(b){ return ['site','coreshell','shell'].indexOf(b.cat) < 0; })
+    .map(function(b){ return { label:b.label, cat:b.cat, val: Math.round(((+b.rate||0) - ws) * pm.mult) }; });
   if (!rates.length) return '';
   var _catOrder = (typeof _FITCAT_ORDER !== 'undefined') ? _FITCAT_ORDER : [];
   function _catRank(c){ var i=_catOrder.indexOf(c||''); return i<0?99:i; }
   rates.sort(function(a,b){
     var ca=_catRank(a.cat), cb=_catRank(b.cat);
     if (ca!==cb) return ca-cb;
-    return (+b.rate||0)-(+a.rate||0);
+    return (b.val||0)-(a.val||0);
   });
-  var maxV = Math.max.apply(null, rates.map(function(b){ return (+b.rate||0)+csRate; })); if (!(maxV>0)) maxV = 1;
+  var maxV = Math.max.apply(null, rates.map(function(b){ return b.val || 0; })); if (!(maxV>0)) maxV = 1;
   var yMax = Math.ceil(maxV/250)*250; if (yMax <= 0) yMax = 250;
   var n = rates.length, W = 560, padL = 44, padR = 14, padT = 34, padB = 122, chartH = 230;
   var innerW = W - padL - padR, slot = innerW / n, barW = Math.min(38, slot*0.66);
-  var csCol = _rateCatColor('coreshell');
-  var h = '<div class="card" style="margin:0"><div class="card-title">Project Costs ($/SF)</div>';
-  h += '<div class="card-sub">All-in construction rate per space type — fit-out $/SF stacked on the Core &amp; Shell rate ($'+F(Math.round(csRate))+'/SF, gray base). Tracks the Fitout Rate Menu (Cost tab); Site excluded.</div>';
+  var h = '<div class="card" style="margin:0"><div class="card-title">Project Costs ($/NSF)</div>';
+  h += '<div class="card-sub">Fit-out project total cost per program NSF: (fit-out $/SF − $'+F(ws)+' warm shell) × +'
+     + (pm.circ*100).toFixed(0)+'% circulation × +'+(pm.hard*100).toFixed(1).replace(/\.0$/,'')
+     + '% contingency &amp; escalation × +'+(pm.soft*100).toFixed(0)
+     + '% soft costs. Core &amp; Shell + Site carried separately. Tracks the Fitout Rate Menu (Cost tab).</div>';
   h += '<div style="overflow-x:auto"><svg viewBox="0 0 '+W+' '+(chartH+padT+padB)+'" style="width:100%;font-family:\'Roboto\',sans-serif">';
   for (var g=0; g<=4; g++){ var yy=padT+chartH-chartH*g/4, vv=yMax*g/4;
     h += '<line x1="'+padL+'" y1="'+yy+'" x2="'+(W-padR)+'" y2="'+yy+'" stroke="var(--bdr)" stroke-dasharray="3,3"/>';
     h += '<text x="'+(padL-7)+'" y="'+(yy+3)+'" text-anchor="end" font-size="9" fill="var(--mut)">$'+F(Math.round(vv))+'</text>'; }
   rates.forEach(function(b,i){
-    var x = padL + slot*i + slot/2, fit = +b.rate || 0, tot = fit + csRate;
-    var totH = tot/yMax*chartH; if (totH<1) totH=1;
-    var csH = Math.min(totH, csRate/yMax*chartH);
-    var fitH = totH - csH;
-    var yTop = padT+chartH-totH, x0 = x-barW/2;
+    var x = padL + slot*i + slot/2, val = b.val || 0;
+    var bh = val/yMax*chartH; if (bh<1) bh=1;
+    var y = padT+chartH-bh, x0 = x-barW/2;
     var col = _rateCatColor(b.cat || 'research');
-    // Core & Shell base segment (gray).
-    if (csH > 0) h += '<rect x="'+x0.toFixed(1)+'" y="'+(padT+chartH-csH).toFixed(1)+'" width="'+barW.toFixed(1)+'" height="'+csH.toFixed(1)+'" fill="'+csCol+'"/>';
-    // Fit-out segment on top, colored by FICM category.
-    if (fitH > 0) h += '<rect x="'+x0.toFixed(1)+'" y="'+yTop.toFixed(1)+'" width="'+barW.toFixed(1)+'" height="'+fitH.toFixed(1)+'" rx="2" fill="'+col+'"/>';
-    var lbl = '$'+F(Math.round(tot));
+    h += '<rect x="'+x0.toFixed(1)+'" y="'+y.toFixed(1)+'" width="'+barW.toFixed(1)+'" height="'+bh.toFixed(1)+'" rx="2" fill="'+col+'"/>';
+    var lbl = '$'+F(val);
     var fs = Math.min(11, Math.max(7, barW*1.7/lbl.length));
-    h += '<text x="'+x+'" y="'+(yTop-5)+'" text-anchor="middle" font-size="'+fs.toFixed(1)+'" font-weight="800" fill="var(--navy)">'+lbl+'</text>';
+    h += '<text x="'+x+'" y="'+(y-5)+'" text-anchor="middle" font-size="'+fs.toFixed(1)+'" font-weight="800" fill="var(--navy)">'+lbl+'</text>';
     h += _angledWrapLabel(String(b.label||''), x, padT+chartH+13);
   });
   h += '<line x1="'+padL+'" y1="'+(padT+chartH)+'" x2="'+(W-padR)+'" y2="'+(padT+chartH)+'" stroke="#1B3A5C" stroke-width="1.5"/>';
-  h += '</svg></div>';
-  h += '<div style="display:flex;align-items:center;gap:6px;margin-top:4px"><span style="width:10px;height:10px;border-radius:2px;background:'+csCol+'"></span><span style="font-size:.74rem;color:var(--navy);font-weight:900">Core &amp; Shell base — $'+F(Math.round(csRate))+'/SF</span></div>';
-  h += '</div>';
+  h += '</svg></div></div>';
+  return h;
+}
+// v0.8.35: "Program Elements | Costs Breakdown" — per-element project-cost
+// buildup table (bottom of the Cost tab). Fixed program-element column set
+// (NSF from the July 2026 program), rates resolved LIVE from the Fitout Rate
+// Menu by key, buildup %s from the Project Cost Buildup card. Print-safe:
+// colors forced via print-color-adjust, card starts on its own page.
+var _PE_COLUMNS = [
+  { label:'Loading Dock',          nsf:2000, rateKey:'support',         red:false },
+  { label:'Cafe',                  nsf:1500, rateKey:'community' },
+  { label:'Career Services',       nsf:1000, rateKey:'office' },
+  { label:'Farley Center',         nsf:1800, rateKey:'office' },
+  { label:'Dean’s Suite',     nsf:2700, rateKey:'office' },
+  { label:'Classrooms (×4)',  nsf:4800, rateKey:'event' },
+  { label:'Colloquium',            nsf:2000, rateKey:'event' },
+  { label:'Clubs',                 nsf:2000, rateKey:'custom_mq2eg7um' },
+  { label:'Shared Lab Facilities', nsf:5000, rateKey:'optics_high', color:'#E068B5' },
+  { label:'Cleanroom 5K SF',       nsf:5000, rateKey:'cleanroom' }
+];
+var _PE_CAT_HEX = { research:'#F28D79', office:'#98ACE5', collaboration:'#FFE885',
+  support:'#C2C3C8', learning:'#66C6C1', core:'#E068B5', coreshell:'#8A9099',
+  site:'#AECF9C', shell:'#F8D5CC' };
+function _peFmt(v){ return (v >= 9.95e5) ? '$'+(v/1e6).toFixed(1)+'M' : '$'+F(Math.round(v/1e3))+'K'; }
+function _buildProgramElementsCostTable() {
+  var menu = window.BENCH_RATES || []; if (!menu.length) return '';
+  function entry(k){ return menu.filter(function(x){ return x.key === k; })[0]; }
+  var pm = _projCostMult(), ws = _warmShellRate();
+  var csE = entry('core_shell'), stE = entry('site');
+  var csRate = csE ? +csE.rate : ((S.cost && +S.cost.coreShellRate) || 950);
+  var stRate = stE ? +stE.rate : ((S.cost && +S.cost.siteRate) || 90);
+  var cs = (S && S.cost) || {};
+  var designPct = cs.designContingencyPct || 0, contrPct = cs.constructionContingencyPct || 0;
+  var softL = [
+    ['Professional services', cs.professionalServicesPct||0],
+    ['Owner work',            cs.ownerWorkPct||0],
+    ['Project contingency',   cs.projectContingencyPct||0],
+    ['Permits',               cs.permitsPct||0],
+    ['PM fee',                cs.pmFeePct||0]
+  ];
+  // Per-column math — mirrors the Program Elements sheet: DGSF = NSF × (1+circ),
+  // GSF = DGSF × (1+bldg support); base = C&S + site (per GSF) + fit-out (per
+  // DGSF); hard = base × (1 + design + contingency + escalation); soft lines
+  // each a % of hard; PTC = hard × (1 + Σsoft). "Shelled" swaps the fit-out
+  // rate for the warm-shell rate; fit-out project cost = PTC − shelled PTC.
+  var cols = _PE_COLUMNS.map(function(c){
+    var e = entry(c.rateKey) || { rate:0, cat:'research' };
+    var rate = +e.rate || 0;
+    var dgsf = Math.round(c.nsf * (1 + pm.circ));
+    var gsf  = Math.round(dgsf * (1 + pm.bs));
+    var fit = dgsf * rate, cshell = gsf * csRate, site = gsf * stRate;
+    var base = cshell + site + fit;
+    var hard = base * (1 + pm.hard);
+    var total = hard * (1 + pm.soft);
+    var shelledBase = cshell + site + dgsf * ws;
+    var shelledTotal = shelledBase * (1 + pm.hard) * (1 + pm.soft);
+    var fitPC = total - shelledTotal;
+    return { label:c.label, nsf:c.nsf, dgsf:dgsf, gsf:gsf, rate:rate,
+      color: c.color || _PE_CAT_HEX[e.cat] || '#C2C3C8',
+      fit:fit, cshell:cshell, site:site, base:base,
+      design: base*designPct, contr: base*contrPct, esc: base*pm.esc,
+      hard:hard, total:total, shelledTotal:shelledTotal, fitPC:fitPC,
+      redPerSF: (c.red === false) ? null : Math.round(fitPC / c.nsf) };
+  });
+  var csSitePTC = Math.floor((csRate + stRate) * (1 + pm.bs) * (1 + designPct + contrPct) * (1 + pm.esc) * (1 + pm.soft));
+  var NAVY = '#1B2A44', RED = '#EE0000', GRAY = '#8A9099';
+  function tds(fn, style){ return cols.map(function(c){ return '<td style="'+(style||'')+'">'+fn(c)+'</td>'; }).join(''); }
+  var h = '<div class="card pe-cost-card" style="min-width:0">';
+  h += '<div class="card-title"><span style="color:#5A2D82">Program Elements</span> <span style="font-weight:300;color:var(--mut)">| Costs Breakdown</span></div>';
+  h += '<div class="card-sub">Per-element project total cost (PTC) buildup — rates resolve live from the Fitout Rate Menu; %s from the Project Cost Buildup card. Red = fit-out project cost per NSF (PTC less the $'+F(ws)+'/SF-shelled PTC).</div>';
+  h += '<div style="overflow-x:auto"><table class="pe-cost-table">';
+  h += '<colgroup><col style="width:15.5%">'+cols.map(function(){ return '<col style="width:'+(84.5/cols.length).toFixed(2)+'%">'; }).join('')+'</colgroup>';
+  // ── chip rows ──
+  h += '<tr class="pe-chips"><td style="text-align:left;font-weight:900;color:var(--navy);font-size:.8rem;line-height:1.25">'+F(csSitePTC)+' $/sf<br>C&amp;S+ Site PTC</td>'
+     + tds(function(c){ return c.redPerSF == null ? '' : '<span class="pe-chip" style="background:'+RED+';color:#fff">$'+F(c.redPerSF)+'/SF</span>'; })
+     + '</tr>';
+  h += '<tr class="pe-chips"><td></td>'
+     + tds(function(c){ return '<span class="pe-chip" style="background:'+c.color+';color:#1B2A44">$'+F(c.rate)+'/SF</span>'; })
+     + '</tr>';
+  // ── header ──
+  h += '<tr class="pe-head"><td style="text-align:left">PROGRAM</td>'+tds(function(c){ return c.label.toUpperCase(); })+'</tr>';
+  // ── fitout cost ──
+  h += '<tr class="pe-fit"><td class="pe-lbl" style="font-weight:700;color:#5A2D82">Fitout cost&nbsp;&nbsp;<span style="font-weight:400">(DGSF × rate)</span></td>'
+     + tds(function(c){ return '<span style="color:var(--mut)">$'+F(c.rate)+'/SF</span><br><strong>'+_peFmt(c.fit)+'</strong>'; })+'</tr>';
+  function sec(lbl){ return '<tr class="pe-sec"><td colspan="'+(cols.length+1)+'">'+lbl+'</td></tr>'; }
+  function row(lbl, fn, bold){ return '<tr class="pe-row'+(bold?' pe-bold':'')+'"><td class="pe-lbl">'+lbl+'</td>'+tds(fn)+'</tr>'; }
+  h += sec('AREAS');
+  h += row('<strong>NSF</strong> <span class="pe-note">(Net Square Feet)</span>', function(c){ return F(c.nsf)+' SF'; });
+  h += row('<strong>DGSF</strong> <span class="pe-note">(Net +'+(pm.circ*100).toFixed(0)+'% Circulation)</span>', function(c){ return F(c.dgsf)+' SF'; });
+  h += row('<strong>GSF</strong> <span class="pe-note">(DGSF +'+(pm.bs*100).toFixed(0)+'% Building Support)</span>', function(c){ return F(c.gsf)+' SF'; });
+  h += sec('CONSTRUCTION');
+  h += row('<strong>Core &amp; shell</strong> <span class="pe-note">($'+F(csRate)+'/GSF)</span>', function(c){ return _peFmt(c.cshell); });
+  h += row('<strong>Site &amp; demo</strong> <span class="pe-note">($'+F(stRate)+'/GSF)</span>', function(c){ return _peFmt(c.site); });
+  h += row('<strong>Fitout</strong> <span class="pe-note">(from above)</span>', function(c){ return _peFmt(c.fit); });
+  h += row('<strong>Base construction</strong>', function(c){ return '<strong>'+_peFmt(c.base)+'</strong>'; }, true);
+  if (designPct > 0) h += row('<strong>Design contingency ('+(designPct*100).toFixed(0)+'%)</strong>', function(c){ return _peFmt(c.design); });
+  h += row('<strong>Construction contingency ('+(contrPct*100).toFixed(0)+'%)</strong>', function(c){ return _peFmt(c.contr); });
+  h += row('<strong>Escalation ('+(pm.esc*100).toFixed(1).replace(/\.0$/,'')+'%)</strong>', function(c){ return _peFmt(c.esc); });
+  h += row('<strong>Hard cost</strong>', function(c){ return '<strong>'+_peFmt(c.hard)+'</strong>'; }, true);
+  h += sec('PROJECT SOFT COSTS');
+  softL.forEach(function(s){
+    h += row('<strong>'+s[0]+' ('+(s[1]*100).toFixed(0)+'%)</strong>', function(c){ return _peFmt(c.hard * s[1]); });
+  });
+  // ── total bands ──
+  h += '<tr class="pe-band" style="background:'+NAVY+'"><td class="pe-lbl" style="color:#fff">TOTAL PROJECT COST</td>'
+     + tds(function(c){ return _peFmt(c.total); }, 'color:#fff;font-weight:900')+'</tr>';
+  h += '<tr class="pe-band" style="background:'+GRAY+'"><td class="pe-lbl" style="color:#fff">IF SHELLED <span style="background:'+RED+';color:#fff;padding:0 4px;border-radius:3px">($'+F(ws)+'/SF fitout)</span></td>'
+     + tds(function(c){ return _peFmt(c.shelledTotal); }, 'color:#fff;font-weight:900')+'</tr>';
+  h += '<tr class="pe-band" style="background:'+RED+'"><td class="pe-lbl" style="color:#fff">FIT-OUT PROJECT COST</td>'
+     + tds(function(c){ return _peFmt(c.fitPC); }, 'color:#fff;font-weight:900')+'</tr>';
+  h += '</table></div></div>';
   return h;
 }
 // v0.8.12: replaces "Premium Over Bare Minimum" — program fit-out composition
