@@ -4135,7 +4135,8 @@ function _buildScenarioEfficiencyChart() {
   var rates = (window.BENCH_RATES || []).slice();
   if (!rates.length) return '';
   // v0.8.33: sort by FICM category (dashboard order), then by rate high→low.
-  var _catOrder = (typeof _FITCAT_ORDER !== 'undefined') ? _FITCAT_ORDER : [];
+  // v0.8.39: Cleanroom ('core') leads the x-axis on the rate/cost bar charts.
+  var _catOrder = ['core'].concat(((typeof _FITCAT_ORDER !== 'undefined') ? _FITCAT_ORDER : []).filter(function(c){ return c !== 'core'; }));
   function _catRank(c){ var i=_catOrder.indexOf(c||''); return i<0?99:i; }
   rates.sort(function(a,b){
     var ca=_catRank(a.cat), cb=_catRank(b.cat);
@@ -4196,7 +4197,8 @@ function _buildProjectCostRateChart() {
   var rates = all.filter(function(b){ return ['site','coreshell','shell'].indexOf(b.cat) < 0; })
     .map(function(b){ return { label:b.label, cat:b.cat, val: Math.round(((+b.rate||0) - ws) * pm.mult) }; });
   if (!rates.length) return '';
-  var _catOrder = (typeof _FITCAT_ORDER !== 'undefined') ? _FITCAT_ORDER : [];
+  // v0.8.39: Cleanroom ('core') leads the x-axis, matching the Fitout Rates chart.
+  var _catOrder = ['core'].concat(((typeof _FITCAT_ORDER !== 'undefined') ? _FITCAT_ORDER : []).filter(function(c){ return c !== 'core'; }));
   function _catRank(c){ var i=_catOrder.indexOf(c||''); return i<0?99:i; }
   rates.sort(function(a,b){
     var ca=_catRank(a.cat), cb=_catRank(b.cat);
